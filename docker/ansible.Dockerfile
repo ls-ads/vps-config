@@ -3,7 +3,7 @@
 # runs the same tool matrix. No local Python or Ansible install needed —
 # Docker is the only host-side dependency.
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 ARG ANSIBLE_VERSION=9.5.1
 
