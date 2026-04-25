@@ -44,6 +44,51 @@
   changed_when: false
   failed_when: false
 
+- name: Compute whether re-auth is needed
+  set_fact:
+    needs_tailscale_auth: "{{ tailscale_state.rc != 0 or (tailscale_state.stdout | from_json).BackendState != 'Running' }}"
+
+# --- Reclaim hostname (optional) -----------------------------------------
+# When this VM has just been rebuilt, the previous machine entry in the
+# tailnet keeps the canonical hostname (e.g. uat-vm) and Tailscale assigns
+# the new node an incremented name (uat-vm-1). To avoid that, we use the
+# Tailscale Admin API to delete any device whose `hostname` matches ours
+# before we authenticate. Skipped if `tailscale_api_key` is empty — in
+# that case rebuilds will increment hostnames and you'll need to manually
+# delete the offline device from the admin panel.
+#
+# Mint an API access token at https://login.tailscale.com/admin/settings/keys
+# (type: "API access" — distinct from the auth key used for `tailscale up`).
+
+- name: Reclaim tailnet hostname before re-auth (delete stale devices)
+  when:
+    - needs_tailscale_auth
+    - tailscale_api_key | default('') | length > 0
+  block:
+    - name: List existing Tailscale devices in tailnet
+      uri:
+        url: "https://api.tailscale.com/api/v2/tailnet/-/devices"
+        headers:
+          Authorization: "Bearer {{ tailscale_api_key }}"
+        return_content: true
+      register: ts_devices_response
+      delegate_to: localhost
+      become: false
+      no_log: true
+
+    - name: Delete any device matching our hostname (frees the canonical name)
+      uri:
+        url: "https://api.tailscale.com/api/v2/device/{{ item.id }}"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ tailscale_api_key }}"
+        status_code: [200, 404]
+      loop: "{{ ts_devices_response.json.devices | default([]) | selectattr('hostname', 'equalto', tailscale_hostname) | list }}"
+      loop_control:
+        label: "{{ item.id }} (name={{ item.name }}, last seen {{ item.lastSeen | default('?') }})"
+      delegate_to: localhost
+      become: false
+
 - name: Authenticate to tailnet (first run / re-auth only)
   command: >
     tailscale up
@@ -51,9 +96,7 @@
       --hostname={{ tailscale_hostname }}
       --accept-dns={{ tailscale_accept_dns | ternary('true', 'false') }}
       --ssh={{ tailscale_ssh | ternary('true', 'false') }}
-  when: >
-    tailscale_state.rc != 0
-    or (tailscale_state.stdout | from_json).BackendState != 'Running'
+  when: needs_tailscale_auth
   no_log: true
 
 # --- Expose tailscale0 IPv4 as a host fact --------------------------------
