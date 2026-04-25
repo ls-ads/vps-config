@@ -1,12 +1,12 @@
-{#- Multi-zone cloudflare action invocation + iptables fallback. Each
-    zone gets its own invocation with a unique actname (fail2ban would
+{#- Multi-domain cloudflare action invocation + iptables fallback. Each
+    domain gets its own invocation with a unique actname (fail2ban would
     reject duplicate action names without this). The iptables-multiport
     line is a belt-and-braces DROP on the host firewall in case a client
     bypasses Cloudflare by hitting the origin IP directly — the
     origin_lockdown role normally prevents that on Prod, but we keep
     the rule in case origin_lockdown is disabled. -#}
 {%- macro action_block() -%}
-{% for zone in cloudflare_zones %}           cloudflare[name=%(__name__)s, envfile=/etc/fail2ban/cloudflare-{{ zone.label }}.env, actname=cloudflare-{{ zone.label }}]
+{% for d in domains %}           cloudflare[name=%(__name__)s, envfile=/etc/fail2ban/cloudflare-{{ d.name }}.env, actname=cloudflare-{{ d.name | replace('.', '-') }}]
 {% endfor %}           iptables-multiport[name=%(__name__)s, port="80,443", protocol=tcp]
 {%- endmacro -%}
 [nginx-req-limit]

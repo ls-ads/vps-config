@@ -62,16 +62,14 @@
     mode: "0644"
   notify: reload nginx
 
-- name: Render ops-tool server blocks (grafana, +optionally loki/tempo)
+- name: Render ops-tool server blocks (one per (domain × tool))
   template:
     src: ops-tool.conf.j2
-    dest: "{{ server_infra_dir }}/nginx/conf.d/ops-{{ tool.name }}.conf"
+    dest: "{{ server_infra_dir }}/nginx/conf.d/ops-{{ item.0.name | replace('.', '-') }}-{{ item.1.name }}.conf"
     owner: deploy
     group: deploy
     mode: "0644"
-  loop: "{{ ops_tools }}"
-  loop_control:
-    loop_var: tool
+  loop: "{{ domains | product(ops_tools) | list }}"
   notify: reload nginx
 
 # --- Infra stack docker-compose + .env ------------------------------------

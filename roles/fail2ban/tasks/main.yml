@@ -44,23 +44,23 @@
     mode: "0644"
   when:
     - enable_nginx_jails | bool
-    - cloudflare_zones | length > 0
+    - domains | length > 0
   notify: restart fail2ban
 
-- name: Write per-zone cloudflare env files
+- name: Write per-domain cloudflare env files
   template:
     src: cloudflare-env.j2
-    dest: "/etc/fail2ban/cloudflare-{{ zone.label }}.env"
+    dest: "/etc/fail2ban/cloudflare-{{ domain.name }}.env"
     owner: root
     group: root
     mode: "0600"
-  loop: "{{ cloudflare_zones }}"
+  loop: "{{ domains }}"
   loop_control:
-    loop_var: zone
-    label: "{{ zone.label }}"
+    loop_var: domain
+    label: "{{ domain.name }}"
   when:
     - enable_nginx_jails | bool
-    - cloudflare_zones | length > 0
+    - domains | length > 0
   no_log: true
   notify: restart fail2ban
 

@@ -1,19 +1,20 @@
-{% set domain = tool.name ~ '.' ~ ops_subdomain ~ '.' ~ env_prefix ~ apex_domain %}
-{% set cert_primary = zone_primary_domains.parent %}
-# {{ tool.name | capitalize }} — Tailscale-only; DNS points at {{ tailscale_ip }}.
-# Security note: routing here is by Host header; origin_lockdown
-# (Prod) + no public DNS record (both envs) keep this off the open
-# internet.
+{% set ops_domain = item.0 %}
+{% set tool = item.1 %}
+{% set fqdn = tool.name ~ '.' ~ ops_subdomain ~ '.' ~ env_prefix ~ ops_domain.name %}
+{% set cert_primary = domain_cert_primary[ops_domain.name] %}
+# {{ tool.name | capitalize }} on {{ ops_domain.name }} — Tailscale-only; DNS points at {{ tailscale_ip }}.
+# Security note: routing here is by Host header; origin_lockdown (Prod) +
+# no public DNS record (both envs) keep this off the open internet.
 
 server {
     listen 80;
-    server_name {{ domain }};
+    server_name {{ fqdn }};
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl;
-    server_name {{ domain }};
+    server_name {{ fqdn }};
 
     ssl_certificate     /etc/letsencrypt/live/{{ cert_primary }}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{{ cert_primary }}/privkey.pem;

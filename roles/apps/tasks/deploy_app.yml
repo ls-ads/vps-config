@@ -5,24 +5,21 @@
 
 # --- Resolve per-app locals --------------------------------------------
 
-- name: "[{{ app.name }}] Compute domain + matching zone"
+- name: "[{{ app.name }}] Compute domain + matching cert primary"
   set_fact:
     # Optional `subdomain` field shifts the service label BEFORE the env
     # prefix, so an API app can render as api.uat.example.com rather than
     # uat.api.example.com.
     app_domain: "{{ ((app.subdomain ~ '.') if (app.subdomain is defined and app.subdomain) else '') ~ env_prefix ~ app.base_domain }}"
-    app_zone: "{{ cloudflare_zones | selectattr('apex', 'equalto', app.base_domain) | first }}"
+    app_cert_primary: "{{ domain_cert_primary[app.base_domain] | default('') }}"
 
-- name: "[{{ app.name }}] Fail if no Cloudflare zone matches base_domain"
+- name: "[{{ app.name }}] Fail if no domain matches base_domain"
   fail:
     msg: |
-      App '{{ app.name }}' has base_domain '{{ app.base_domain }}' but no entry in
-      cloudflare_zones matches that apex. Add the zone to group_vars/all.yml.
-  when: app_zone is none or app_zone | length == 0
-
-- name: "[{{ app.name }}] Compute cert primary domain (from ssl role fact)"
-  set_fact:
-    app_cert_primary: "{{ zone_primary_domains[app_zone.label] }}"
+      App '{{ app.name }}' has base_domain '{{ app.base_domain }}' but no
+      matching entry in `domains` (group_vars/all.yml). Add the domain
+      and ensure ssl.conf has at least one entry under it.
+  when: app_cert_primary == ''
 
 # --- On-disk layout ---------------------------------------------------
 

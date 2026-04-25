@@ -1,17 +1,19 @@
 ---
-# ssl role — per-zone Let's Encrypt certs via DNS-01 (Cloudflare API).
+# ssl role — per-domain Let's Encrypt certs via DNS-01 (Cloudflare API).
 #
 # Workflow per `ansible-playbook playbooks/site.yml` run:
 #   1. Install certbot + the Cloudflare DNS plugin
-#   2. Read infrastructure/ssl.conf, strip comments/blanks, group by zone
-#   3. Per zone with ≥1 domain:
-#        a. Write /etc/letsencrypt/cloudflare-<label>.ini (chmod 600)
-#        b. Ensure a self-signed placeholder at
-#           /etc/letsencrypt/live/<primary>/ so nginx can start even if
-#           the real cert hasn't been issued yet
-#        c. Run `certbot certonly --dns-cloudflare ...` — on success, the
-#           real cert replaces the placeholder atomically
-#   4. Emit `zone_primary_domains` fact so nginx role knows which
+#   2. Read infrastructure/ssl.conf, strip comments/blanks, group by
+#      domain (suffix-match against each entry in `domains`)
+#   3. Per domain with ≥1 ssl.conf entry:
+#        a. Write /etc/letsencrypt/cloudflare-<domain>.ini (chmod 600)
+#        b. Detect any pre-existing live/<primary>/ that's not a real
+#           LE cert (placeholder, orphan from prior failed run) and nuke
+#           it + any -000X siblings
+#        c. Run `certbot certonly --dns-cloudflare ...`
+#        d. If certbot didn't write a cert, fall back to a self-signed
+#           placeholder so nginx can still start (browser warning)
+#   4. Emit `domain_cert_primary` fact so nginx + apps roles know which
 #      lineage to reference for which server_name
 #   5. Install post-renewal hook that `docker exec nginx nginx -s reload`s
 #      after certbot's systemd timer renews.
@@ -73,20 +75,20 @@
     msg: "infrastructure/ssl.conf has no domain entries — nothing to issue certs for."
   when: ssl_domains | length == 0
 
-# --- Per-zone cert issuance -----------------------------------------------
+# --- Per-domain cert issuance --------------------------------------------
 
-- name: Issue certs per Cloudflare zone
-  include_tasks: zone_cert.yml
-  loop: "{{ cloudflare_zones }}"
+- name: Issue certs per domain
+  include_tasks: domain_cert.yml
+  loop: "{{ domains }}"
   loop_control:
-    loop_var: zone
-    label: "{{ zone.label }} ({{ zone.apex }})"
+    loop_var: domain
+    label: "{{ domain.name }}"
 
-# --- Expose primary domains for nginx role to consume ---------------------
+# --- Expose primary domains for nginx + apps roles to consume -----------
 
-- name: Expose zone → primary-domain map (nginx role reads this)
+- name: Expose domain → cert-primary map (nginx + apps roles read this)
   set_fact:
-    zone_primary_domains: "{{ zone_primary_domains | default({}) }}"
+    domain_cert_primary: "{{ domain_cert_primary | default({}) }}"
     cacheable: true
 
 # --- Renewal post-hook ----------------------------------------------------

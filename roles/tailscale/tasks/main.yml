@@ -116,15 +116,24 @@
 # in Cloudflare pointing at this IP. Derived from apps + ops_tools +
 # env_prefix so the list stays correct as config changes.
 
-- name: Compute ops-tool DNS targets (one per tool in ops_tools)
+- name: Initialize ops DNS targets
   set_fact:
-    _tailscale_ops_targets: >-
-      [{% for tool in ops_tools %}'{{ tool.name }}.{{ ops_subdomain }}.{{ env_prefix }}{{ apex_domain }}'{% if not loop.last %},{% endif %}{% endfor %}]
+    _tailscale_ops_targets: []
 
-- name: Compute app DNS targets (UAT only — apps are Tailscale-gated there)
+- name: Compute ops-tool DNS targets (one per (domain × tool))
   set_fact:
-    _tailscale_app_targets: >-
-      [{% for app in apps %}'{{ env_prefix }}{{ app.base_domain }}'{% if not loop.last %},{% endif %}{% endfor %}]
+    _tailscale_ops_targets: "{{ _tailscale_ops_targets + [item.0.name + '.' + ops_subdomain + '.' + env_prefix + item.1.name] }}"
+  loop: "{{ ops_tools | product(domains) | list }}"
+
+- name: Initialize app DNS targets (UAT only — apps are Tailscale-gated there)
+  set_fact:
+    _tailscale_app_targets: []
+  when: env == 'uat'
+
+- name: Compute app DNS targets (UAT)
+  set_fact:
+    _tailscale_app_targets: "{{ _tailscale_app_targets + [( ((item.subdomain | default('')) + '.') if (item.subdomain | default('') != '') else '' ) + env_prefix + item.base_domain] }}"
+  loop: "{{ apps }}"
   when: env == 'uat'
 
 - name: Combine into tailscale_dns_targets

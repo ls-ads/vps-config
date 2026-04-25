@@ -1,29 +1,35 @@
 # SSL certificate domain list, one per line. Comments (#) and blank lines
-# are ignored. The first non-comment line is the certbot lineage primary;
-# subsequent lines are added as Subject Alternative Names (SANs) on the
-# same cert.
+# are ignored. Each line is grouped by suffix-match into the matching
+# entry in `domains` (group_vars/all.yml); the first non-wildcard entry
+# under each domain becomes that domain's cert lineage primary.
 #
 # Wildcards (e.g. *.ops.uat.example.com) are supported because the SSL
 # role uses DNS-01 challenge via Cloudflare API.
 #
-# Re-run the SSL playbook any time to add or remove domains; the lineage
-# is pinned with --cert-name <primary> so each run replaces the list with
-# whatever is in this file.
+# Re-run the SSL playbook any time to add or remove entries; each
+# domain's lineage is pinned with --cert-name <primary> so the run
+# replaces the SAN list with whatever is in this file.
 #
 # ---------------------------------------------------------------------
 # UAT example (uncomment for the UAT VM):
 # ---------------------------------------------------------------------
 # uat.example.com
+# *.uat.example.com
+# *.ops.uat.example.com
+#
 # uat.example.org
 # *.uat.example.org
-# *.ops.uat.example.com
+# *.ops.uat.example.org
 #
 # ---------------------------------------------------------------------
 # Prod example (uncomment for the Prod VM):
 # ---------------------------------------------------------------------
 # example.com
 # www.example.com
+# *.example.com
+# *.ops.example.com
+#
 # example.org
 # www.example.org
 # *.example.org
-# *.ops.example.com
+# *.ops.example.org

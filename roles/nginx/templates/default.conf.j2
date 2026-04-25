@@ -1,4 +1,4 @@
-{% set default_cert = zone_primary_domains.values() | first %}
+{% set default_cert = domain_cert_primary.values() | first %}
 # Managed by Ansible — catch-all server blocks for unknown Host: headers.
 # Returns 444 (close connection without response) so scanners don't get
 # a stack-identifying reply. The SSL cert reference here is just to let

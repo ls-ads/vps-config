@@ -1,23 +1,23 @@
 ---
-# Per-zone cert issuance — called with loop_var `zone` set to an entry
-# from cloudflare_zones. Reads the zone's CF API token from vault via
-# `zone.dns_vault_key`.
+# Per-domain cert issuance — called with loop_var `domain` set to one
+# entry from the `domains` list. Reads the domain's CF API token from
+# vault via `domain.dns_vault_key`.
 
-- name: "[{{ zone.label }}] Reset zone_domains accumulator"
+- name: "[{{ domain.name }}] Reset zone_domains accumulator"
   set_fact:
     zone_domains: []
 
-- name: "[{{ zone.label }}] Collect ssl.conf domains under .{{ zone.apex }}"
+- name: "[{{ domain.name }}] Collect ssl.conf entries under .{{ domain.name }}"
   set_fact:
     zone_domains: "{{ zone_domains + [item] }}"
   loop: "{{ ssl_domains }}"
   when: >-
-    item == zone.apex
-    or item.endswith('.' + zone.apex)
-    or item == ('*.' + zone.apex)
-    or item.endswith('.*.' + zone.apex)
+    item == domain.name
+    or item.endswith('.' + domain.name)
+    or item == ('*.' + domain.name)
+    or item.endswith('.*.' + domain.name)
 
-- name: "[{{ zone.label }}] Compute primary (first non-wildcard domain for this zone)"
+- name: "[{{ domain.name }}] Compute primary (first non-wildcard entry for this domain)"
   set_fact:
     zone_primary: >-
       {{
@@ -26,22 +26,22 @@
       }}
   when: zone_domains | length > 0
 
-- name: "[{{ zone.label }}] Record primary → lineage mapping for nginx"
+- name: "[{{ domain.name }}] Record domain → cert-primary mapping"
   set_fact:
-    zone_primary_domains: "{{ zone_primary_domains | default({}) | combine({zone.label: zone_primary}) }}"
+    domain_cert_primary: "{{ domain_cert_primary | default({}) | combine({domain.name: zone_primary}) }}"
   when: zone_domains | length > 0
 
-- name: "[{{ zone.label }}] Skip: no ssl.conf domains match .{{ zone.apex }}"
+- name: "[{{ domain.name }}] Skip: no ssl.conf entries match"
   debug:
-    msg: "No ssl.conf entries under .{{ zone.apex }} — skipping this zone."
+    msg: "No ssl.conf entries under .{{ domain.name }} — skipping this domain."
   when: zone_domains | length == 0
 
-- name: "[{{ zone.label }}] Write Cloudflare credentials file"
+- name: "[{{ domain.name }}] Write Cloudflare credentials file"
   copy:
-    dest: "{{ letsencrypt_dir }}/cloudflare-{{ zone.label }}.ini"
+    dest: "{{ letsencrypt_dir }}/cloudflare-{{ domain.name }}.ini"
     content: |
       # Managed by Ansible — do not edit by hand.
-      dns_cloudflare_api_token = {{ lookup('vars', zone.dns_vault_key) }}
+      dns_cloudflare_api_token = {{ lookup('vars', domain.dns_vault_key) }}
     owner: root
     group: root
     mode: "0600"
@@ -49,11 +49,8 @@
   no_log: true
 
 # --- Wipe + run certbot ----------------------------------------------------
-# certbot refuses to write into an existing /etc/letsencrypt/live/<primary>/
-# unless it already manages the lineage (renewal/<primary>.conf present).
-# Pre-wipe any unmanaged dir so a previous run's placeholder doesn't block.
 
-- name: "[{{ zone.label }}] Check if a real Let's Encrypt cert exists at the canonical lineage path"
+- name: "[{{ domain.name }}] Check if a real Let's Encrypt cert exists at the canonical lineage path"
   shell: |
     set -e
     [ -f {{ letsencrypt_dir }}/live/{{ zone_primary }}/fullchain.pem ] || exit 1
@@ -63,7 +60,7 @@
   failed_when: false
   when: zone_domains | length > 0
 
-- name: "[{{ zone.label }}] Wipe placeholder + orphan suffixed lineages (no real LE cert at canonical path)"
+- name: "[{{ domain.name }}] Wipe placeholder + orphan suffixed lineages (no real LE cert at canonical path)"
   shell: |
     set -e
     rm -rf {{ letsencrypt_dir }}/live/{{ zone_primary }}
@@ -77,13 +74,13 @@
     - real_cert_present.rc != 0
   changed_when: true
 
-- name: "[{{ zone.label }}] Run certbot (DNS-01 via Cloudflare API)"
+- name: "[{{ domain.name }}] Run certbot (DNS-01 via Cloudflare API)"
   command: >-
     certbot certonly
       --non-interactive --agree-tos
       --email {{ admin_email }}
       --dns-cloudflare
-      --dns-cloudflare-credentials {{ letsencrypt_dir }}/cloudflare-{{ zone.label }}.ini
+      --dns-cloudflare-credentials {{ letsencrypt_dir }}/cloudflare-{{ domain.name }}.ini
       --dns-cloudflare-propagation-seconds 30
       --cert-name {{ zone_primary }}
       {% for d in zone_domains %}-d {{ d | quote }} {% endfor %}
@@ -97,15 +94,15 @@
 
 # --- Placeholder fallback if certbot didn't write a cert ------------------
 
-- name: "[{{ zone.label }}] Check post-certbot live cert existence"
+- name: "[{{ domain.name }}] Check post-certbot live cert existence"
   stat:
     path: "{{ letsencrypt_dir }}/live/{{ zone_primary }}/fullchain.pem"
   register: post_certbot_cert
   when: zone_domains | length > 0
 
-- name: "[{{ zone.label }}] Write self-signed placeholder (certbot failed and no real cert)"
+- name: "[{{ domain.name }}] Write self-signed placeholder (certbot failed and no real cert)"
   block:
-    - name: "[{{ zone.label }}] Ensure live/ directory"
+    - name: "[{{ domain.name }}] Ensure live/ directory"
       file:
         path: "{{ letsencrypt_dir }}/live/{{ zone_primary }}"
         state: directory
@@ -113,13 +110,13 @@
         group: root
         mode: "0755"
 
-    - name: "[{{ zone.label }}] Generate placeholder private key"
+    - name: "[{{ domain.name }}] Generate placeholder private key"
       community.crypto.openssl_privatekey:
         path: "{{ letsencrypt_dir }}/live/{{ zone_primary }}/privkey.pem"
         size: 2048
         mode: "0600"
 
-    - name: "[{{ zone.label }}] Generate placeholder CSR"
+    - name: "[{{ domain.name }}] Generate placeholder CSR"
       community.crypto.openssl_csr:
         path: "{{ letsencrypt_dir }}/live/{{ zone_primary }}/placeholder.csr"
         privatekey_path: "{{ letsencrypt_dir }}/live/{{ zone_primary }}/privkey.pem"
@@ -128,7 +125,7 @@
           - "DNS:{{ zone_primary }}"
         mode: "0600"
 
-    - name: "[{{ zone.label }}] Generate placeholder self-signed cert"
+    - name: "[{{ domain.name }}] Generate placeholder self-signed cert"
       community.crypto.x509_certificate:
         path: "{{ letsencrypt_dir }}/live/{{ zone_primary }}/fullchain.pem"
         privatekey_path: "{{ letsencrypt_dir }}/live/{{ zone_primary }}/privkey.pem"
@@ -141,10 +138,10 @@
     - certbot_result.rc | default(0) != 0
     - not post_certbot_cert.stat.exists
 
-- name: "[{{ zone.label }}] Surface certbot output on failure"
+- name: "[{{ domain.name }}] Surface certbot output on failure"
   debug:
     msg: |
-      certbot did not issue a real cert for zone '{{ zone.label }}':
+      certbot did not issue a real cert for domain '{{ domain.name }}':
       {{ certbot_result.stdout | default('') }}
       {{ certbot_result.stderr | default('') }}
       A self-signed placeholder at {{ letsencrypt_dir }}/live/{{ zone_primary }}/

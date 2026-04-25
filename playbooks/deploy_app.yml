@@ -16,7 +16,7 @@
     # by name via `app_name` to avoid that collision.
     apps_filter: ["{{ app_name | mandatory }}"]
   roles:
-    - role: ssl     # populates zone_primary_domains fact that apps role
+    - role: ssl     # populates domain_cert_primary fact that apps role
                     # uses for cert-path resolution. Idempotent; certbot
                     # is a no-op when current certs are still valid.
     - role: apps
