@@ -1,0 +1,27 @@
+---
+# tailscale role defaults.
+
+# Hostname to register in the tailnet. Defaults to the Ansible inventory
+# name — e.g. "uat-vm" or "prod-vm" — which reads cleanly in the admin
+# panel at https://login.tailscale.com/admin/machines.
+tailscale_hostname: "{{ inventory_hostname }}"
+
+# Don't let Tailscale rewrite /etc/resolv.conf. The VM's stock DNS
+# resolver is fine for outbound lookups; we don't need MagicDNS here
+# because public DNS A records are what point clients at the Tailscale
+# IP.
+tailscale_accept_dns: false
+
+# We use the VM's regular SSH (via ssh.<infra-domain>, DNS-only public
+# IP) for CI deploys — Tailscale SSH isn't needed and we keep the
+# feature off to reduce surface area.
+tailscale_ssh: false
+
+# Observability tools that get a <tool>.ops.<env-prefix><apex>
+# Tailscale-only endpoint. The nginx role uses the same list to render
+# one server block per tool. Default exposes only Grafana (Loki / Tempo /
+# Prometheus are reached through Grafana's datasource proxy); override
+# in group_vars/all.yml to add direct access to the others.
+ops_tools:
+  - name: grafana
+    port: 3000

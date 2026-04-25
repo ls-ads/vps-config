@@ -1,0 +1,31 @@
+# Ansible
+*.retry
+.galaxy/
+.vault_pass
+
+# Claude Code per-machine settings (local approvals; never committed)
+.claude/
+
+# Filled-in copies of *.example files — gitignored so your private fork
+# can commit real values without them leaking to the public template.
+secrets.yml
+inventory/hosts.yml
+inventory/group_vars/all.yml
+inventory/group_vars/uat.yml
+inventory/group_vars/prod.yml
+infrastructure/ssl.conf
+
+# Certificates + keys (on-disk artefacts, not repo material)
+*.pem
+*.key
+
+# Per-app filled-in vars
+apps/*/vars.yml
+apps/*/.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

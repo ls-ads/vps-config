@@ -1,0 +1,179 @@
+---
+# base role — everything that runs on every `site.yml` execution. Assumes
+# bootstrap.yml has already created the deploy user + NOPASSWD sudo.
+#
+# Tasks in this file are grouped by intent; each group is idempotent.
+
+# --- Apt / packages --------------------------------------------------------
+
+- name: Update apt cache (every 1 h)
+  apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install base packages
+  apt:
+    name: "{{ base_packages }}"
+    state: present
+
+- name: Enable + configure unattended-upgrades
+  copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+# --- Directory tree --------------------------------------------------------
+
+- name: Ensure /opt/server tree exists with deploy ownership
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: deploy
+    group: deploy
+    mode: "0755"
+  loop:
+    - "{{ server_root }}"
+    - "{{ server_infra_dir }}"
+    - "{{ server_apps_dir }}"
+
+# --- Swap ------------------------------------------------------------------
+
+- name: Check whether swap file already exists
+  stat:
+    path: "{{ swap_file_path }}"
+  register: swap_file
+
+- name: Create swap file
+  command: "fallocate -l {{ swap_file_size_mb }}M {{ swap_file_path }}"
+  when: not swap_file.stat.exists
+  register: swap_created
+
+- name: Set swap file permissions
+  file:
+    path: "{{ swap_file_path }}"
+    mode: "0600"
+    owner: root
+    group: root
+  when: swap_created.changed
+
+- name: Format swap file
+  command: "mkswap {{ swap_file_path }}"
+  when: swap_created.changed
+
+- name: Activate swap
+  command: "swapon {{ swap_file_path }}"
+  when: swap_created.changed
+
+- name: Ensure swap is mounted at boot
+  lineinfile:
+    path: /etc/fstab
+    line: "{{ swap_file_path }} none swap sw 0 0"
+    state: present
+
+# --- SSH hardening (re-applied idempotently each run) ----------------------
+
+- name: Re-apply sshd hardening (in case package upgrades reverted it)
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+  loop:
+    - { regexp: "^#?PermitRootLogin", line: "PermitRootLogin no" }
+    - { regexp: "^#?PasswordAuthentication", line: "PasswordAuthentication no" }
+    - { regexp: "^#?PubkeyAuthentication", line: "PubkeyAuthentication yes" }
+    - { regexp: "^#?MaxAuthTries", line: "MaxAuthTries 3" }
+    - { regexp: "^#?ClientAliveInterval", line: "ClientAliveInterval 300" }
+    - { regexp: "^#?ClientAliveCountMax", line: "ClientAliveCountMax 2" }
+  notify: restart sshd
+
+# --- ufw baseline ----------------------------------------------------------
+# Allow 22 always. The origin_lockdown role (Prod only) adds CF-scoped
+# rules for 80/443 later in the play. On UAT, 80/443 stay closed publicly
+# and Tailscale's own interface traffic is untouched.
+
+- name: Set ufw default policies
+  ufw:
+    state: enabled
+    policy: deny
+    direction: incoming
+
+- name: Set ufw default outgoing policy to allow
+  ufw:
+    state: enabled
+    policy: allow
+    direction: outgoing
+
+- name: Allow SSH on {{ ssh_port }}
+  ufw:
+    rule: allow
+    port: "{{ ssh_port }}"
+    proto: tcp
+    comment: ssh
+
+- name: Open public 80/443 (overridden by origin_lockdown role on Prod)
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+    comment: "public-web (will be tightened by origin_lockdown on Prod)"
+  loop: ["80", "443"]
+  when: public_web_ports_open | bool
+
+# --- Docker ----------------------------------------------------------------
+
+- name: Ensure /etc/apt/keyrings exists
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Install Docker apt key
+  get_url:
+    url: "{{ docker_apt_key_url }}"
+    dest: /etc/apt/keyrings/docker.gpg.asc
+    mode: "0644"
+
+- name: Dearmour Docker apt key
+  command: gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg /etc/apt/keyrings/docker.gpg.asc
+  args:
+    creates: /etc/apt/keyrings/docker.gpg
+
+- name: Add Docker apt repository
+  apt_repository:
+    repo: "{{ docker_apt_repo }}"
+    state: present
+    filename: docker
+
+- name: Install Docker Engine + Compose plugin
+  apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Ensure Docker service is enabled + started
+  service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Add deploy user to docker group
+  user:
+    name: deploy
+    groups: docker
+    append: true
+
+- name: Log in to GHCR (writes /root/.docker/config.json — apps + nginx
+         roles do `docker compose pull` with become:true, so root's
+         credentials store is the one we need)
+  community.docker.docker_login:
+    registry: ghcr.io
+    username: "{{ ghcr_user }}"
+    password: "{{ ghcr_token }}"

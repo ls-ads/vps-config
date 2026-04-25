@@ -1,0 +1,19 @@
+{% set default_cert = zone_primary_domains.values() | first %}
+# Managed by Ansible — catch-all server blocks for unknown Host: headers.
+# Returns 444 (close connection without response) so scanners don't get
+# a stack-identifying reply. The SSL cert reference here is just to let
+# nginx parse the block; the content never reaches the client.
+
+server {
+    listen 80 default_server;
+    server_name _;
+    return 444;
+}
+
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    ssl_certificate     /etc/letsencrypt/live/{{ default_cert }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ default_cert }}/privkey.pem;
+    return 444;
+}

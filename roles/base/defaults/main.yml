@@ -1,0 +1,37 @@
+---
+# base role defaults — override in group_vars/<env>.yml if needed.
+
+# Path defaults are in inventory/group_vars/all.yml.example so they're
+# available to single-role plays (deploy_app.yml etc.) that don't
+# include base. Override there if you need a non-/opt/server layout.
+
+# Swap file size (2 GB is plenty for an 8 GB VM).
+swap_file_path: /swapfile
+swap_file_size_mb: 2048
+
+# Public web-port posture. UAT closes 80/443 entirely (apps live on the
+# Tailscale interface); Prod opens 80/443 and the origin_lockdown role
+# restricts them to Cloudflare CIDRs.
+public_web_ports_open: false
+
+# Baseline ssh port — change via group_vars if you want a non-22 port.
+ssh_port: 22
+
+# Packages installed on every VM.
+base_packages:
+  - ca-certificates
+  - curl
+  - git
+  - gnupg
+  - jq
+  - lsb-release
+  - openssl
+  - python3-docker
+  - python3-pip
+  - rsync
+  - unattended-upgrades
+  - unzip
+
+# Docker apt repo.
+docker_apt_key_url: https://download.docker.com/linux/ubuntu/gpg
+docker_apt_repo: "deb [arch={{ 'amd64' if ansible_architecture == 'x86_64' else ansible_architecture }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"

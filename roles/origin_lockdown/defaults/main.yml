@@ -1,0 +1,15 @@
+---
+# origin_lockdown role defaults.
+
+# Prod-only by default. On UAT the entire VM closes public :80/:443 at
+# the base-role ufw layer (no public web ports are opened), so there's
+# nothing to lock down.
+enable_origin_lockdown: "{{ public_web_ports_open | default(false) }}"
+
+# Cloudflare IP range URLs. Use HTTPS — CF publishes these on its own CDN.
+cf_ips_v4_url: https://www.cloudflare.com/ips-v4
+cf_ips_v6_url: https://www.cloudflare.com/ips-v6
+
+# Marker strings used by blockinfile to identify the managed region in
+# /etc/ufw/after.rules and /etc/ufw/after6.rules.
+lockdown_marker: "CLOUDFLARE-LOCKDOWN (managed by roles/origin_lockdown)"

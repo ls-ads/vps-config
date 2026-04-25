@@ -1,0 +1,12 @@
+---
+# Prod-specific overrides. Copy to group_vars/prod.yml (gitignored).
+
+env: prod
+env_prefix: ""
+
+# Prod apps are public, behind Cloudflare proxy. ufw allows 80/443 from CF
+# CIDRs only; Origin lockdown role refreshes the CIDR list daily.
+public_web_ports_open: true
+enable_origin_lockdown: true
+
+enable_fail2ban: true

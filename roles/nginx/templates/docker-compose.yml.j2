@@ -1,0 +1,190 @@
+# Managed by Ansible (roles/nginx). Do not edit — regenerated every run.
+# Brings up the full infrastructure stack on this VM:
+#   nginx + postgres + LGTM (Loki/Grafana/Tempo/metrics) + exporters.
+# Apps declare `infra` as an external network so nginx can reach them by
+# container name.
+
+services:
+
+  # ============================================================
+  # REVERSE PROXY
+  # ============================================================
+  nginx:
+    image: {{ nginx_image }}
+    container_name: nginx
+    restart: unless-stopped
+    mem_limit: 128m
+    ports:
+{% if env == 'uat' %}
+      # UAT: bind only to the tailscale0 IP — public :80/:443 stay closed.
+      # No HTTP listener needed on UAT (we don't redirect public HTTP here).
+      - "{{ tailscale_ip }}:443:443"
+{% else %}
+      # Prod: public :80/:443 (Cloudflare-proxied). The origin_lockdown
+      # role restricts eth0:443 to Cloudflare CIDRs only; tailscale0
+      # traffic is unaffected (rules key off the public interface).
+      - "80:80"
+      - "443:443"
+{% endif %}
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/log/nginx:/var/log/nginx
+    networks:
+      - {{ infra_network_name }}
+
+  # ============================================================
+  # DATABASE
+  # ============================================================
+  postgres:
+    image: {{ postgres_image }}
+    container_name: postgres
+    restart: unless-stopped
+    mem_limit: 1g
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      # Postgres 18+ stores data under /var/lib/postgresql/<version>/, not
+      # /var/lib/postgresql/data — mount the parent dir so pg_upgrade works.
+      - postgres_data:/var/lib/postgresql
+      - ./postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    networks:
+      - {{ infra_network_name }}
+
+  # ============================================================
+  # OBSERVABILITY — LGTM STACK
+  # ============================================================
+  loki:
+    image: {{ loki_image }}
+    container_name: loki
+    restart: unless-stopped
+    mem_limit: 1g
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    networks:
+      - {{ infra_network_name }}
+
+  promtail:
+    image: {{ promtail_image }}
+    container_name: promtail
+    restart: unless-stopped
+    mem_limit: 256m
+    command: -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - {{ infra_network_name }}
+    depends_on:
+      - loki
+
+  grafana:
+    image: {{ grafana_image }}
+    container_name: grafana
+    restart: unless-stopped
+    mem_limit: 512m
+    # Grafana authenticates with a local admin account (nginx/Tailscale is
+    # the outer gate). No auth proxy setup; access to this container is
+    # restricted at the edge.
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+      GF_SERVER_ROOT_URL: ${GF_SERVER_ROOT_URL}
+      GF_SERVER_DOMAIN: ${GF_SERVER_DOMAIN}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - {{ infra_network_name }}
+    depends_on:
+      - loki
+      - tempo
+      - prometheus
+
+  tempo:
+    image: {{ tempo_image }}
+    container_name: tempo
+    restart: unless-stopped
+    mem_limit: 512m
+    command: -config.file=/etc/tempo/tempo-config.yml
+    volumes:
+      - ./tempo/tempo-config.yml:/etc/tempo/tempo-config.yml:ro
+      - tempo_data:/var/tempo
+    networks:
+      - {{ infra_network_name }}
+
+  prometheus:
+    image: {{ prometheus_image }}
+    container_name: prometheus
+    restart: unless-stopped
+    mem_limit: 1g
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=5GB
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/targets:/etc/prometheus/targets:ro
+      - prometheus_data:/prometheus
+    networks:
+      - {{ infra_network_name }}
+
+  node-exporter:
+    image: {{ node_exporter_image }}
+    container_name: node-exporter
+    restart: unless-stopped
+    mem_limit: 128m
+    command:
+      - --path.rootfs=/host
+    volumes:
+      - /:/host:ro,rslave
+    pid: host
+    networks:
+      - {{ infra_network_name }}
+
+  postgres-exporter:
+    image: {{ postgres_exporter_image }}
+    container_name: postgres-exporter
+    restart: unless-stopped
+    mem_limit: 128m
+    environment:
+      DATA_SOURCE_USER: ${POSTGRES_USER}
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD}
+      DATA_SOURCE_URI: "postgres:5432/postgres?sslmode=disable"
+    networks:
+      - {{ infra_network_name }}
+    depends_on:
+      - postgres
+
+  cadvisor:
+    image: {{ cadvisor_image }}
+    container_name: cadvisor
+    restart: unless-stopped
+    mem_limit: 256m
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - {{ infra_network_name }}
+
+networks:
+  {{ infra_network_name }}:
+    driver: bridge
+    name: {{ infra_network_name }}   # explicit name so app compose files can attach
+
+volumes:
+  postgres_data:
+  loki_data:
+  grafana_data:
+  tempo_data:
+  prometheus_data:

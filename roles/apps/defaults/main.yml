@@ -1,0 +1,7 @@
+---
+# apps role defaults.
+
+# Optional filter: when set via `-e apps_filter='["frontend"]'` (or used
+# by playbooks/deploy_app.yml), only the listed apps are (re)deployed.
+# Default empty list = process every app declared in group_vars/all.yml.
+apps_filter: []

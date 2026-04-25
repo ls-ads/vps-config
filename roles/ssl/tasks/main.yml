@@ -1,0 +1,106 @@
+---
+# ssl role — per-zone Let's Encrypt certs via DNS-01 (Cloudflare API).
+#
+# Workflow per `ansible-playbook playbooks/site.yml` run:
+#   1. Install certbot + the Cloudflare DNS plugin
+#   2. Read infrastructure/ssl.conf, strip comments/blanks, group by zone
+#   3. Per zone with ≥1 domain:
+#        a. Write /etc/letsencrypt/cloudflare-<label>.ini (chmod 600)
+#        b. Ensure a self-signed placeholder at
+#           /etc/letsencrypt/live/<primary>/ so nginx can start even if
+#           the real cert hasn't been issued yet
+#        c. Run `certbot certonly --dns-cloudflare ...` — on success, the
+#           real cert replaces the placeholder atomically
+#   4. Emit `zone_primary_domains` fact so nginx role knows which
+#      lineage to reference for which server_name
+#   5. Install post-renewal hook that `docker exec nginx nginx -s reload`s
+#      after certbot's systemd timer renews.
+
+# --- Install --------------------------------------------------------------
+
+- name: Install certbot + Cloudflare DNS plugin
+  apt:
+    name:
+      - certbot
+      - python3-certbot-dns-cloudflare
+    state: present
+    update_cache: true
+
+- name: Ensure letsencrypt dirs exist (live/ + renewal-hooks/post)
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ letsencrypt_dir }}"
+    - "{{ letsencrypt_dir }}/live"
+    - "{{ letsencrypt_dir }}/renewal-hooks"
+    - "{{ letsencrypt_dir }}/renewal-hooks/post"
+
+# --- Read ssl.conf --------------------------------------------------------
+
+- name: Fail fast if ssl.conf is missing
+  stat:
+    path: "{{ ssl_conf_path }}"
+  delegate_to: localhost
+  become: false
+  register: ssl_conf_stat
+
+- name: Abort with guidance when ssl.conf doesn't exist
+  fail:
+    msg: |
+      infrastructure/ssl.conf is missing. Copy the template and uncomment
+      the domains for this VM's environment:
+
+        cp infrastructure/ssl.conf.example infrastructure/ssl.conf
+        $EDITOR infrastructure/ssl.conf
+  when: not ssl_conf_stat.stat.exists
+
+- name: Read ssl.conf and strip comments / blanks
+  set_fact:
+    ssl_domains: "{{
+        lookup('file', ssl_conf_path).splitlines()
+        | map('trim')
+        | reject('match', '^#')
+        | reject('equalto', '')
+        | list
+      }}"
+
+- name: Fail if ssl.conf is empty
+  fail:
+    msg: "infrastructure/ssl.conf has no domain entries — nothing to issue certs for."
+  when: ssl_domains | length == 0
+
+# --- Per-zone cert issuance -----------------------------------------------
+
+- name: Issue certs per Cloudflare zone
+  include_tasks: zone_cert.yml
+  loop: "{{ cloudflare_zones }}"
+  loop_control:
+    loop_var: zone
+    label: "{{ zone.label }} ({{ zone.apex }})"
+
+# --- Expose primary domains for nginx role to consume ---------------------
+
+- name: Expose zone → primary-domain map (nginx role reads this)
+  set_fact:
+    zone_primary_domains: "{{ zone_primary_domains | default({}) }}"
+    cacheable: true
+
+# --- Renewal post-hook ----------------------------------------------------
+
+- name: Install certbot post-renewal hook (nginx reload)
+  copy:
+    dest: "{{ letsencrypt_dir }}/renewal-hooks/post/reload-nginx.sh"
+    content: "{{ renewal_post_hook }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure certbot.timer (systemd) is enabled for renewals
+  service:
+    name: certbot.timer
+    state: started
+    enabled: true

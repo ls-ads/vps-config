@@ -1,0 +1,99 @@
+---
+# origin_lockdown role — restricts public :80/:443 to Cloudflare edge IP
+# ranges at two layers:
+#
+#   1. ufw INPUT chain (host firewall) — per-CIDR allow rules replace
+#      the broad 80/443 allow from the base role.
+#   2. iptables DOCKER-USER chain (via /etc/ufw/after.rules) — Docker's
+#      own iptables path bypasses ufw's filter table entirely, so the
+#      INPUT-layer lockdown doesn't cover Docker-published container
+#      ports. Managed block in after.rules adds the DOCKER-USER rules.
+#
+# Tailscale traffic on tailscale0 is unaffected: the DOCKER-USER rule
+# explicitly matches `-i {{ pub_iface }}` so packets from any other
+# interface fall through.
+
+- name: Apply Cloudflare-only origin lockdown
+  when: enable_origin_lockdown | bool
+  block:
+
+    # --- Fetch CF ranges ------------------------------------------------
+
+    - name: Fetch Cloudflare IPv4 CIDR list
+      uri:
+        url: "{{ cf_ips_v4_url }}"
+        return_content: true
+      register: cf_v4_raw
+      delegate_to: localhost
+      become: false
+
+    - name: Fetch Cloudflare IPv6 CIDR list
+      uri:
+        url: "{{ cf_ips_v6_url }}"
+        return_content: true
+      register: cf_v6_raw
+      delegate_to: localhost
+      become: false
+
+    - name: Parse CIDR lists
+      set_fact:
+        cf_v4_ranges: "{{ cf_v4_raw.content.splitlines() | map('trim') | reject('equalto', '') | list }}"
+        cf_v6_ranges: "{{ cf_v6_raw.content.splitlines() | map('trim') | reject('equalto', '') | list }}"
+
+    - name: Sanity-check CIDR lists are non-empty
+      fail:
+        msg: "Fetched empty CF IP lists — aborting before touching firewall rules."
+      when: cf_v4_ranges | length == 0 or cf_v6_ranges | length == 0
+
+    # --- Detect public interface ----------------------------------------
+
+    - name: Detect public network interface
+      command: ip -4 route get 1.1.1.1
+      register: route_lookup
+      changed_when: false
+
+    - name: Parse public interface name
+      set_fact:
+        pub_iface: "{{ route_lookup.stdout | regex_search('dev\\s+(\\S+)', '\\1') | first }}"
+
+    # --- Layer 1: ufw INPUT chain --------------------------------------
+
+    - name: Remove any existing broad 80/443 ufw allow rules
+      shell: |
+        set -e
+        RULES=$(ufw status numbered 2>/dev/null \
+          | awk -F '[][]' '/\] *(80|443)([ \/,]|$)/ { gsub(/ /, "", $2); print $2 }' \
+          | sort -rn)
+        if [ -n "$RULES" ]; then
+          echo "$RULES" | while read n; do ufw --force delete "$n"; done
+        fi
+      register: broad_removal
+      changed_when: broad_removal.stdout != ""
+
+    - name: Add per-CF-CIDR ufw allow rules for :80/:443
+      community.general.ufw:
+        rule: allow
+        from_ip: "{{ item }}"
+        to_port: "80,443"
+        proto: tcp
+        comment: Cloudflare
+      loop: "{{ cf_v4_ranges + cf_v6_ranges }}"
+      notify: reload ufw
+
+    # --- Layer 2: DOCKER-USER chain (/etc/ufw/after.rules) -------------
+
+    - name: Ensure DOCKER-USER rules in after.rules (IPv4)
+      blockinfile:
+        path: /etc/ufw/after.rules
+        marker: "# {mark} {{ lockdown_marker }}"
+        insertafter: EOF
+        block: "{{ lookup('template', 'docker-user-block.j2', template_vars={'cf_ranges': cf_v4_ranges}) }}"
+      notify: reload ufw
+
+    - name: Ensure DOCKER-USER rules in after6.rules (IPv6)
+      blockinfile:
+        path: /etc/ufw/after6.rules
+        marker: "# {mark} {{ lockdown_marker }}"
+        insertafter: EOF
+        block: "{{ lookup('template', 'docker-user-block.j2', template_vars={'cf_ranges': cf_v6_ranges}) }}"
+      notify: reload ufw

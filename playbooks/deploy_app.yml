@@ -1,0 +1,22 @@
+---
+# Deploy or redeploy a single app. Useful when you've pushed a new image
+# and want to roll the app forward without re-running the full site.yml.
+#
+#   ./ansible playbooks/deploy_app.yml --limit uat -e app_name=frontend
+#   ./ansible playbooks/deploy_app.yml --limit prod -e app_name=myapp
+
+- name: Deploy a single app
+  hosts: all
+  remote_user: deploy
+  become: true
+  vars_files:
+    - ../secrets.yml
+  vars:
+    # apps role's loop_var is `app` (a dict from the apps list); we filter
+    # by name via `app_name` to avoid that collision.
+    apps_filter: ["{{ app_name | mandatory }}"]
+  roles:
+    - role: ssl     # populates zone_primary_domains fact that apps role
+                    # uses for cert-path resolution. Idempotent; certbot
+                    # is a no-op when current certs are still valid.
+    - role: apps

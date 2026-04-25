@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # GitHub Actions runners + third-party actions used across workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      pipeline-dependencies:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(ci)"
+
+  # Python deps for the Ansible runner image (Dockerfile pins `ansible`,
+  # `passlib`, etc.). Dependabot picks these up because the Dockerfile
+  # uses `pip install "<pkg>==<ver>"`.
+  - package-ecosystem: "docker"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(ansible-runner)"

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Run Ansible tooling from a Docker container. Only local dependency is
+# Docker itself — no Python or pipx install needed.
+#
+# Usage:
+#   ./ansible playbooks/site.yml --limit uat             # default = ansible-playbook
+#   ./ansible --cmd ansible-vault edit secrets.yml       # any other ansible-* tool
+#   ./ansible --cmd ansible-inventory --list             # same pattern
+#   ./ansible --rebuild playbooks/site.yml --limit uat   # force image rebuild
+#
+# Image tag override: VPS_CONFIG_ANSIBLE_IMAGE (default "vps-config-ansible:local").
+
+set -euo pipefail
+
+IMAGE_TAG="${VPS_CONFIG_ANSIBLE_IMAGE:-vps-config-ansible:local}"
+DOCKERFILE="docker/ansible.Dockerfile"
+CMD=ansible-playbook
+BUILD_FLAGS=(--quiet)
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --cmd)     CMD="$2"; shift 2 ;;
+        --rebuild) BUILD_FLAGS=(--no-cache); shift ;;
+        --help|-h)
+            sed -n '2,/^set -e/p' "$0" | sed 's/^# \{0,1\}//' | head -n -1
+            exit 0
+            ;;
+        *) break ;;
+    esac
+done
+
+docker build "${BUILD_FLAGS[@]}" -t "$IMAGE_TAG" -f "$DOCKERFILE" . >/dev/null
+
+TTY_FLAGS=()
+if [[ -t 0 && -t 1 ]]; then
+    TTY_FLAGS=(-it)
+fi
+
+exec docker run --rm "${TTY_FLAGS[@]}" \
+    -v "$PWD:/workspace" \
+    -v "$HOME/.ssh:/root/.ssh:ro" \
+    -w /workspace \
+    "$IMAGE_TAG" "$CMD" "$@"

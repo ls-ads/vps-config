@@ -1,0 +1,7 @@
+---
+- name: reload nginx
+  community.docker.docker_container_exec:
+    container: nginx
+    command: nginx -s reload
+  ignore_errors: true
+  listen: reload nginx

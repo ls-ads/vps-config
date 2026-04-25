@@ -1,0 +1,27 @@
+---
+# ssl role defaults.
+
+# Certbot configuration directory — standard location; `certbot certonly`
+# writes lineages under /etc/letsencrypt/live/<cert-name>/ and archives
+# under /etc/letsencrypt/archive/<cert-name>/.
+letsencrypt_dir: /etc/letsencrypt
+
+# Path to the filled-in ssl.conf on the operator workstation. Rendered
+# relative to playbook_dir so the file travels to the VM at task time.
+ssl_conf_path: "{{ playbook_dir }}/../infrastructure/ssl.conf"
+
+# Self-signed placeholder cert validity. Only consulted when a real cert
+# from Let's Encrypt hasn't yet been issued (first run, or after a
+# bad CF token). 30 days is long enough that a broken run doesn't brick
+# nginx, short enough that you notice the browser warning.
+placeholder_cert_days: 30
+
+# How certbot renewal is scheduled. The deb package ships a systemd
+# timer (certbot.timer) that runs twice daily and calls `certbot -q renew
+# --post-hook "...nginx reload..."`. We reuse that timer and install our
+# own post-hook.
+renewal_post_hook: |
+  #!/bin/sh
+  # Post-renewal hook installed by Ansible. Reloads nginx on the server
+  # once certbot has replaced any cert files on disk.
+  /usr/bin/docker exec nginx nginx -s reload >/dev/null 2>&1 || true

@@ -1,0 +1,107 @@
+---
+# nginx role — writes the nginx config tree, renders the infra
+# docker-compose.yml + .env, and runs `docker compose up -d` to bring
+# the whole stack online.
+#
+# Runs after ssl / postgres / observability so all bind-mount paths and
+# cert lineages already exist.
+
+# --- Nginx config tree -----------------------------------------------------
+
+- name: Ensure nginx config dirs exist
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: deploy
+    group: deploy
+    mode: "0755"
+  loop:
+    - "{{ server_infra_dir }}/nginx"
+    - "{{ server_infra_dir }}/nginx/conf.d"
+
+- name: Ensure /var/log/nginx exists (nginx container bind-mounts here)
+  file:
+    path: /var/log/nginx
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy static nginx.conf
+  copy:
+    src: nginx.conf
+    dest: "{{ server_infra_dir }}/nginx/nginx.conf"
+    owner: deploy
+    group: deploy
+    mode: "0644"
+  notify: reload nginx
+
+- name: Install Cloudflare real-IP trust list (Prod only)
+  copy:
+    src: cloudflare-realip.conf
+    dest: "{{ server_infra_dir }}/nginx/conf.d/cloudflare-realip.conf"
+    owner: deploy
+    group: deploy
+    mode: "0644"
+  when: env == 'prod'
+  notify: reload nginx
+
+- name: Remove Cloudflare real-IP trust list on non-Prod VMs
+  file:
+    path: "{{ server_infra_dir }}/nginx/conf.d/cloudflare-realip.conf"
+    state: absent
+  when: env != 'prod'
+  notify: reload nginx
+
+- name: Render default.conf (catch-all that returns 444 for unknown Host)
+  template:
+    src: default.conf.j2
+    dest: "{{ server_infra_dir }}/nginx/conf.d/default.conf"
+    owner: deploy
+    group: deploy
+    mode: "0644"
+  notify: reload nginx
+
+- name: Render ops-tool server blocks (grafana, +optionally loki/tempo)
+  template:
+    src: ops-tool.conf.j2
+    dest: "{{ server_infra_dir }}/nginx/conf.d/ops-{{ tool.name }}.conf"
+    owner: deploy
+    group: deploy
+    mode: "0644"
+  loop: "{{ ops_tools }}"
+  loop_control:
+    loop_var: tool
+  notify: reload nginx
+
+# --- Infra stack docker-compose + .env ------------------------------------
+
+- name: Render infra .env
+  template:
+    src: infra.env.j2
+    dest: "{{ server_infra_dir }}/.env"
+    owner: deploy
+    group: deploy
+    mode: "0600"
+  no_log: true
+
+- name: Render infra docker-compose.yml
+  template:
+    src: docker-compose.yml.j2
+    dest: "{{ server_infra_dir }}/docker-compose.yml"
+    owner: deploy
+    group: deploy
+    mode: "0644"
+
+# --- Bring the stack up ----------------------------------------------------
+
+- name: Pull infra stack images
+  community.docker.docker_compose_v2_pull:
+    project_src: "{{ server_infra_dir }}"
+
+- name: Bring up infra stack (docker compose up -d)
+  community.docker.docker_compose_v2:
+    project_src: "{{ server_infra_dir }}"
+    state: present
+    remove_orphans: true   # drops authelia/redis containers left from old setup
+  notify: reload nginx

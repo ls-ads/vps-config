@@ -1,0 +1,17 @@
+---
+# UAT-specific overrides. Copy to group_vars/uat.yml (gitignored).
+#
+# UAT VM hosts ALL its app domains behind Tailscale — there is no public
+# DNS path to the apps. Public ports 80/443 are closed at ufw. Origin
+# lockdown is therefore a no-op (handled by the closed ports).
+
+env: uat
+env_prefix: "uat."
+
+# UAT apps are Tailscale-only; the public ufw rules close 80/443 entirely
+# rather than opening to Cloudflare ranges.
+public_web_ports_open: false
+enable_origin_lockdown: false   # no public web traffic to lock down
+
+# Fail2ban still useful for SSH brute-force protection on UAT.
+enable_fail2ban: true

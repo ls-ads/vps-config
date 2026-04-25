@@ -1,0 +1,79 @@
+---
+# Shared variables across both environments. Copy to group_vars/all.yml
+# (gitignored) and fill in.
+
+admin_email: you@example.com
+
+# On-disk layout for /opt/server. Rarely overridden — every role
+# references these paths so promoting them out of role defaults makes
+# them available to single-role plays (deploy_app.yml).
+server_root: /opt/server
+server_infra_dir: "{{ server_root }}/infrastructure"
+server_apps_dir: "{{ server_root }}/apps"
+
+# Domain hierarchy:
+#   apex_domain         — your parent / holding-company site
+#   product_apex        — your product domain
+#   ops_subdomain       — observability tools live under <tool>.<ops_subdomain>.<env-prefix><apex>
+#                         (e.g. grafana.ops.example.com on Prod, grafana.ops.uat.example.com on UAT)
+#                         These point at the VM's Tailscale IP — anyone not on
+#                         the tailnet can't reach them.
+apex_domain: example.com
+product_apex: example.org
+ops_subdomain: ops
+
+# Cloudflare zones. One entry per zone you operate. `apex` is the
+# zone's root domain — used by the SSL role to decide which ssl.conf
+# entries belong to which zone (suffix match).
+#
+# Two API tokens per zone (more granular than one combined token):
+#   dns_vault_key       — Zone:DNS:Edit, used by certbot DNS-01 challenge.
+#   firewall_vault_key  — Zone:Firewall Services:Edit, used by fail2ban
+#                         to push bans to IP Access Rules.
+# Both keys name an entry in secrets.yml. Mint scoped tokens at
+# https://dash.cloudflare.com/profile/api-tokens and restrict each to
+# its single zone.
+cloudflare_zones:
+  - label: parent
+    apex: example.com           # literal — must match apex_domain above
+    zone_id: <32-hex-zone-id-for-parent-zone>
+    dns_vault_key: cf_token_parent_dns
+    firewall_vault_key: cf_token_parent_firewall
+  - label: product
+    apex: example.org           # literal — must match product_apex above
+    zone_id: <32-hex-zone-id-for-product-zone>
+    dns_vault_key: cf_token_product_dns
+    firewall_vault_key: cf_token_product_firewall
+
+# Apps to deploy on every VM. Each name corresponds to apps/<name>/. The
+# playbooks render the per-env domain (env_prefix + base_domain) at deploy
+# time. Define base_domain as a literal — Ansible's lazy templating in
+# group_vars makes "{{ apex_domain }}" surface as a literal string when
+# fed to filters like regex_escape, so just write the bare hostname.
+apps:
+  - name: frontend
+    base_domain: example.com    # → example.com (Prod) / uat.example.com (UAT)
+    image: ghcr.io/<owner>/frontend:latest
+    port: 3000
+    needs_database: true
+    needs_jwt: true
+  - name: myapp
+    base_domain: example.org    # → example.org (Prod) / uat.example.org (UAT)
+    image: ghcr.io/<owner>/myapp:latest
+    port: 3000
+    needs_database: true
+    needs_jwt: true
+    # Per-app env vars (in addition to the auto-generated DATABASE_URL +
+    # JWT_SECRET). Reference vault values via {{ ... }}.
+    # env:
+    #   ORIGIN: "https://{{ env_prefix }}example.org"
+    #   BETTER_AUTH_SECRET: "{{ myapp_better_auth_secret }}"
+  - name: myapp-api
+    base_domain: example.org    # apex (zone matched by suffix)
+    subdomain: api              # → api.example.org (Prod) / api.uat.example.org (UAT)
+    image: ghcr.io/<owner>/myapp-api:latest
+    port: 8000
+    needs_database: false       # shares myapp's DB (set DATABASE_URL via env below)
+    needs_jwt: false
+    # env:
+    #   DATABASE_URL: "postgresql://myapp:{{ myapp_db_password }}@postgres:5432/myapp"

@@ -1,0 +1,16 @@
+---
+# fail2ban role defaults.
+
+# Whether to install nginx jails. Default: true iff the VM has public web
+# traffic (Prod). On UAT the only reachable :443 is Tailscale-only, so
+# nginx jails add noise without value.
+enable_nginx_jails: "{{ public_web_ports_open | default(false) }}"
+
+# Per-jail tuning — conservative defaults.
+nginx_req_limit_maxretry: 10
+nginx_req_limit_findtime: 60
+nginx_req_limit_bantime: 600
+
+nginx_scanner_maxretry: 30
+nginx_scanner_findtime: 60
+nginx_scanner_bantime: 600

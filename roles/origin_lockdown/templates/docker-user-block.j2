@@ -1,0 +1,15 @@
+*filter
+:DOCKER-USER - [0:0]
+# Allow return traffic for established connections initiated from the
+# container side (outbound flows keep working).
+-A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+# Allow inter-container traffic (bridge networks) — only filter packets
+# that entered from the public interface.
+-A DOCKER-USER ! -i {{ pub_iface }} -j RETURN
+# Per-Cloudflare-CIDR allow for :80/:443 entering the public interface.
+{% for cidr in cf_ranges %}
+-A DOCKER-USER -i {{ pub_iface }} -p tcp -m multiport --dports 80,443 -s {{ cidr }} -j RETURN
+{% endfor %}
+# Drop everything else targeting :80/:443 from the public interface.
+-A DOCKER-USER -i {{ pub_iface }} -p tcp -m multiport --dports 80,443 -j DROP
+COMMIT

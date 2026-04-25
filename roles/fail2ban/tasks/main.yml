@@ -1,0 +1,92 @@
+---
+# fail2ban role — installs fail2ban, drops filters + multi-zone CF ban
+# action, and installs the nginx jails on hosts that serve public web
+# traffic (Prod). On UAT the nginx jails are skipped (no public web
+# surface to protect); sshd jail ships with the package by default.
+
+- name: Install fail2ban
+  apt:
+    name: fail2ban
+    state: present
+
+- name: Ensure /var/log/nginx exists (jail logpath)
+  file:
+    path: /var/log/nginx
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: enable_nginx_jails | bool
+
+# --- Filters -----------------------------------------------------------
+
+- name: Install nginx filters
+  copy:
+    src: "filter.d/{{ item }}"
+    dest: "/etc/fail2ban/filter.d/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - nginx-req-limit.conf
+    - nginx-scanner.conf
+  when: enable_nginx_jails | bool
+  notify: restart fail2ban
+
+# --- Cloudflare action + per-zone env files ---------------------------
+
+- name: Install cloudflare action (parameterised by envfile)
+  copy:
+    src: action.d/cloudflare.conf
+    dest: /etc/fail2ban/action.d/cloudflare.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - enable_nginx_jails | bool
+    - cloudflare_zones | length > 0
+  notify: restart fail2ban
+
+- name: Write per-zone cloudflare env files
+  template:
+    src: cloudflare-env.j2
+    dest: "/etc/fail2ban/cloudflare-{{ zone.label }}.env"
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ cloudflare_zones }}"
+  loop_control:
+    loop_var: zone
+    label: "{{ zone.label }}"
+  when:
+    - enable_nginx_jails | bool
+    - cloudflare_zones | length > 0
+  no_log: true
+  notify: restart fail2ban
+
+# --- Jail file ---------------------------------------------------------
+
+- name: Render nginx jails (Prod)
+  template:
+    src: jail-nginx.conf.j2
+    dest: /etc/fail2ban/jail.d/nginx.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: enable_nginx_jails | bool
+  notify: restart fail2ban
+
+- name: Remove nginx jail on non-Prod hosts (if previously installed)
+  file:
+    path: /etc/fail2ban/jail.d/nginx.conf
+    state: absent
+  when: not (enable_nginx_jails | bool)
+  notify: restart fail2ban
+
+# --- Ensure service is up --------------------------------------------
+
+- name: Ensure fail2ban is enabled and running
+  service:
+    name: fail2ban
+    state: started
+    enabled: true

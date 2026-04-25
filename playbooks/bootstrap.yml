@@ -1,0 +1,93 @@
+---
+# One-shot bootstrap for a fresh VM. Runs as root (root SSH must still be
+# enabled — it is on a freshly-provisioned Hetzner/DigitalOcean/etc. VM
+# before we harden it). Creates the deploy user, installs your SSH key,
+# hands it NOPASSWD sudo, and disables root SSH + password auth.
+#
+# Usage (from your workstation):
+#   ansible-playbook playbooks/bootstrap.yml --limit uat -u root
+#   ansible-playbook playbooks/bootstrap.yml --limit prod -u root
+#
+# After this runs once successfully, subsequent plays (site.yml,
+# deploy_app.yml) connect as the deploy user — do not re-run bootstrap
+# unless you are rebuilding the VM from scratch.
+#
+# Requires in secrets.yml:
+#   deploy_user_password        — random shell password
+#
+# Picks up your local SSH public key from ~/.ssh/id_ed25519.pub unless
+# you set `deploy_public_key` as an extra-var or in group_vars/all.yml.
+
+- name: Bootstrap fresh VM (create deploy user, harden SSH)
+  hosts: all
+  remote_user: root            # explicit — bootstrap is the one play that runs as root
+  gather_facts: false
+  become: false
+  vars_files:
+    - ../secrets.yml
+  vars:
+    deploy_public_key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
+  tasks:
+    - name: Ensure Python 3 is present (raw, before facts gather)
+      raw: which python3 || (apt-get update && apt-get install -y python3 python3-apt)
+      changed_when: false
+
+    - name: Gather facts now that Python is guaranteed
+      setup:
+
+    - name: Create deploy group
+      group:
+        name: deploy
+        state: present
+
+    - name: Create deploy user with shell password from vault
+      user:
+        name: deploy
+        password: "{{ deploy_user_password | password_hash('sha512') }}"
+        shell: /bin/bash
+        group: deploy            # primary group (created in the previous task)
+        groups:
+          - sudo
+        append: true
+        create_home: true
+
+    - name: Install deploy user's authorized_keys
+      authorized_key:
+        user: deploy
+        state: present
+        key: "{{ deploy_public_key }}"
+        exclusive: true
+
+    - name: Install NOPASSWD sudoers for deploy user
+      copy:
+        dest: /etc/sudoers.d/deploy
+        content: |
+          # Managed by Ansible (roles/base). Do not edit by hand.
+          deploy ALL=(ALL) NOPASSWD: ALL
+        mode: "0440"
+        owner: root
+        group: root
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Harden sshd — disable root login + password auth
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+        backup: true
+      loop:
+        - { regexp: "^#?PermitRootLogin", line: "PermitRootLogin no" }
+        - { regexp: "^#?PasswordAuthentication", line: "PasswordAuthentication no" }
+        - { regexp: "^#?PubkeyAuthentication", line: "PubkeyAuthentication yes" }
+      notify: restart sshd
+
+    - name: Smoke-test deploy user's sudo works before we disable root
+      command: sudo -u deploy sudo -n /bin/true
+      changed_when: false
+
+  handlers:
+    - name: restart sshd
+      service:
+        name: ssh
+        state: restarted

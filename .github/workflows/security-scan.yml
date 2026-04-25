@@ -1,0 +1,59 @@
+name: Security Scan
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays 06:00 UTC
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+jobs:
+  trivy-scan:
+    name: Trivy Config & Image Scanner
+    runs-on: ubuntu-latest
+    # Run on schedule/manual; on PRs only run for dependabot's image bumps.
+    if: github.event_name != 'pull_request' || github.actor == 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Trivy IaC config scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
+      - name: Install Trivy for image scanning
+        run: |
+          sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" \
+            | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      - name: Scan infra-stack images from roles/nginx/defaults/main.yml
+        run: |
+          # Image pins live in roles/nginx/defaults/main.yml as `<name>_image: "<tag>"`.
+          images=$(grep -hE '^\s*[a-z_]+_image:\s*"[^"]+"' roles/nginx/defaults/main.yml \
+                    | awk '{print $2}' | tr -d '"')
+          fail=0
+          for img in $images; do
+            echo "Scanning $img..."
+            trivy image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 "$img" || fail=1
+          done
+          if [ $fail -ne 0 ]; then
+            echo "::error::Vulnerabilities found in one or more Docker images."
+            if [ "${{ github.actor }}" = "dependabot[bot]" ]; then
+              echo "::notice::Dependabot PR — soft-failing (these are the latest vendor versions)."
+              exit 0
+            else
+              exit 1
+            fi
+          fi

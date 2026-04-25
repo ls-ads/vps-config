@@ -1,0 +1,22 @@
+---
+# postgres role — writes the init-databases.sh that Postgres runs on
+# first boot of a fresh volume. The apps role handles per-app DB + role
+# creation idempotently on every run (covers apps added after the first
+# boot).
+
+- name: Ensure postgres config dir exists
+  file:
+    path: "{{ server_infra_dir }}/postgres"
+    state: directory
+    owner: deploy
+    group: deploy
+    mode: "0755"
+
+- name: Render init-databases.sh
+  template:
+    src: init-databases.sh.j2
+    dest: "{{ server_infra_dir }}/postgres/init-databases.sh"
+    owner: deploy
+    group: deploy
+    mode: "0755"
+  no_log: true   # contains vault-sourced DB passwords

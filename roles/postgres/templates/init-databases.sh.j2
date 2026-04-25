@@ -1,0 +1,16 @@
+#!/bin/bash
+# Managed by Ansible (roles/postgres). Runs ONCE, on first boot of a fresh
+# postgres volume — docker-entrypoint will not invoke it again after that.
+# Idempotent DB/role maintenance on subsequent runs is the apps role's job
+# (it uses `docker exec postgres psql ...` with IF NOT EXISTS).
+set -e
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "postgres" <<-EOSQL
+{% for app in apps %}
+{%   if app.needs_database | default(false) %}
+    CREATE ROLE "{{ app.name }}" WITH LOGIN PASSWORD '{{ lookup('vars', app.name + '_db_password') }}';
+    CREATE DATABASE "{{ app.name }}" OWNER "{{ app.name }}";
+    GRANT ALL PRIVILEGES ON DATABASE "{{ app.name }}" TO "{{ app.name }}";
+{%   endif %}
+{% endfor %}
+EOSQL

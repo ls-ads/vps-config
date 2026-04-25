@@ -1,0 +1,25 @@
+---
+# Inventory template. Copy to inventory/hosts.yml (gitignored) and fill in.
+#
+# One host per environment — each VM is dedicated to a single env so you can
+# upgrade infrastructure (nginx, postgres, observability stack) on UAT,
+# validate, then promote to Prod independent of application changes.
+
+all:
+  children:
+    uat:
+      hosts:
+        uat-vm:
+          ansible_host: <uat-vm-public-ip>
+    prod:
+      hosts:
+        prod-vm:
+          ansible_host: <prod-vm-public-ip>
+
+  vars:
+    # The connection user is set by the playbook (`remote_user: deploy` in
+    # site.yml + deploy_app.yml; bootstrap.yml leaves it unset so the
+    # default root-in-container is used). We deliberately don't set
+    # ansible_user here — group/inventory vars outrank the CLI `-u`
+    # flag, which makes ad-hoc overrides surprising.
+    ansible_ssh_private_key_file: ~/.ssh/id_ed25519

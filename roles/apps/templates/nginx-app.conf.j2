@@ -1,0 +1,32 @@
+# Managed by Ansible (roles/apps) for {{ app.name }}.
+# Domain: {{ app_domain }}  (env={{ env }})
+# Cert lineage: /etc/letsencrypt/live/{{ app_cert_primary }}/
+
+server {
+    listen 80;
+    server_name {{ app_domain }};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name {{ app_domain }};
+
+    ssl_certificate     /etc/letsencrypt/live/{{ app_cert_primary }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ app_cert_primary }}/privkey.pem;
+
+    resolver 127.0.0.11 valid=30s;
+    set $upstream http://{{ app.name }}:{{ app.port }};
+
+    location / {
+        limit_req zone=general burst=60 nodelay;
+        proxy_pass $upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}

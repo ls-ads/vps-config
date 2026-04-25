@@ -1,0 +1,17 @@
+# Managed by Ansible (roles/apps). Do not edit — regenerated from
+# group_vars/all.yml + secrets.yml on every deploy.
+
+services:
+  {{ app.name }}:
+    image: {{ app.image }}
+    container_name: {{ app.name }}
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - {{ infra_network_name | default('infra') }}
+
+networks:
+  {{ infra_network_name | default('infra') }}:
+    external: true
+    name: {{ infra_network_name | default('infra') }}

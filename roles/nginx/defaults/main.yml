@@ -1,0 +1,24 @@
+---
+# nginx role defaults.
+
+# Image pins for the infra stack. Bump in-place; docker compose up -d
+# picks up the new tag. Dependabot watches this file via the project's
+# .github/dependabot.yml.
+nginx_image: "nginx:1.29.8-alpine"
+postgres_image: "postgres:18-alpine"
+grafana_image: "grafana/grafana:12.4.3"
+loki_image: "grafana/loki:3.7.1"
+promtail_image: "grafana/promtail:3.6.8"
+tempo_image: "grafana/tempo:2.10.5"
+prometheus_image: "prom/prometheus:v3.11.2"
+node_exporter_image: "prom/node-exporter:v1.11.1"
+postgres_exporter_image: "prometheuscommunity/postgres-exporter:v0.19.1"
+cadvisor_image: "gcr.io/cadvisor/cadvisor:v0.55.1"
+
+# Shared Docker network name. Apps declare this as `external: true` in
+# their own docker-compose.yml so nginx can reach them by container name.
+infra_network_name: infra
+
+# Default admin user for Postgres — safe to keep as `postgres`. Change
+# in group_vars/all.yml if you need a different name.
+postgres_user: postgres

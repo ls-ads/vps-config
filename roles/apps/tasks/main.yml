@@ -1,0 +1,22 @@
+---
+# apps role — loops over `apps` from group_vars/all.yml (optionally
+# filtered by `apps_filter`) and deploys each. Per-app tasks live in
+# deploy_app.yml.
+
+- name: Resolve app list (all or filtered)
+  set_fact:
+    apps_to_deploy: >-
+      {{
+        (apps_filter | length > 0)
+          | ternary(
+              apps | selectattr('name', 'in', apps_filter) | list,
+              apps
+            )
+      }}
+
+- name: Deploy each app
+  include_tasks: deploy_app.yml
+  loop: "{{ apps_to_deploy }}"
+  loop_control:
+    loop_var: app
+    label: "{{ app.name }}"

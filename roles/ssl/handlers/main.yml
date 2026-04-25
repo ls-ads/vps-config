@@ -1,0 +1,7 @@
+---
+- name: reload nginx
+  community.docker.docker_container_exec:
+    container: nginx
+    command: nginx -s reload
+  ignore_errors: true   # nginx may not be up yet on first run; nginx role starts it
+  listen: reload nginx

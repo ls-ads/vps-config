@@ -1,0 +1,28 @@
+{#- Multi-zone cloudflare action invocation + iptables fallback. Each
+    zone gets its own invocation with a unique actname (fail2ban would
+    reject duplicate action names without this). The iptables-multiport
+    line is a belt-and-braces DROP on the host firewall in case a client
+    bypasses Cloudflare by hitting the origin IP directly — the
+    origin_lockdown role normally prevents that on Prod, but we keep
+    the rule in case origin_lockdown is disabled. -#}
+{%- macro action_block() -%}
+{% for zone in cloudflare_zones %}           cloudflare[name=%(__name__)s, envfile=/etc/fail2ban/cloudflare-{{ zone.label }}.env, actname=cloudflare-{{ zone.label }}]
+{% endfor %}           iptables-multiport[name=%(__name__)s, port="80,443", protocol=tcp]
+{%- endmacro -%}
+[nginx-req-limit]
+enabled  = true
+filter   = nginx-req-limit
+logpath  = /var/log/nginx/error.log
+maxretry = {{ nginx_req_limit_maxretry }}
+findtime = {{ nginx_req_limit_findtime }}
+bantime  = {{ nginx_req_limit_bantime }}
+action   = {{ action_block().lstrip() }}
+
+[nginx-scanner]
+enabled  = true
+filter   = nginx-scanner
+logpath  = /var/log/nginx/access.log
+maxretry = {{ nginx_scanner_maxretry }}
+findtime = {{ nginx_scanner_findtime }}
+bantime  = {{ nginx_scanner_bantime }}
+action   = {{ action_block().lstrip() }}

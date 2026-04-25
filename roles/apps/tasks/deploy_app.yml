@@ -1,0 +1,113 @@
+---
+# Per-app deploy, called from apps/tasks/main.yml with `app` set to one
+# entry from the apps list. Handles on-disk rendering, idempotent DB
+# provisioning, image pull, and compose up.
+
+# --- Resolve per-app locals --------------------------------------------
+
+- name: "[{{ app.name }}] Compute domain + matching zone"
+  set_fact:
+    # Optional `subdomain` field shifts the service label BEFORE the env
+    # prefix, so an API app can render as api.uat.example.com rather than
+    # uat.api.example.com.
+    app_domain: "{{ ((app.subdomain ~ '.') if (app.subdomain is defined and app.subdomain) else '') ~ env_prefix ~ app.base_domain }}"
+    app_zone: "{{ cloudflare_zones | selectattr('apex', 'equalto', app.base_domain) | first }}"
+
+- name: "[{{ app.name }}] Fail if no Cloudflare zone matches base_domain"
+  fail:
+    msg: |
+      App '{{ app.name }}' has base_domain '{{ app.base_domain }}' but no entry in
+      cloudflare_zones matches that apex. Add the zone to group_vars/all.yml.
+  when: app_zone is none or app_zone | length == 0
+
+- name: "[{{ app.name }}] Compute cert primary domain (from ssl role fact)"
+  set_fact:
+    app_cert_primary: "{{ zone_primary_domains[app_zone.label] }}"
+
+# --- On-disk layout ---------------------------------------------------
+
+- name: "[{{ app.name }}] Ensure app directory exists"
+  file:
+    path: "{{ server_apps_dir }}/{{ app.name }}"
+    state: directory
+    owner: deploy
+    group: deploy
+    mode: "0755"
+
+- name: "[{{ app.name }}] Render docker-compose.yml"
+  template:
+    src: docker-compose.yml.j2
+    dest: "{{ server_apps_dir }}/{{ app.name }}/docker-compose.yml"
+    owner: deploy
+    group: deploy
+    mode: "0644"
+
+- name: "[{{ app.name }}] Render .env"
+  template:
+    src: app.env.j2
+    dest: "{{ server_apps_dir }}/{{ app.name }}/.env"
+    owner: deploy
+    group: deploy
+    mode: "0600"
+  no_log: true
+
+- name: "[{{ app.name }}] Render nginx vhost"
+  template:
+    src: nginx-app.conf.j2
+    dest: "{{ server_infra_dir }}/nginx/conf.d/app-{{ app.name }}.conf"
+    owner: deploy
+    group: deploy
+    mode: "0644"
+  notify: reload nginx
+
+- name: "[{{ app.name }}] Render Prometheus scrape target"
+  template:
+    src: prometheus-target.json.j2
+    dest: "{{ server_infra_dir }}/prometheus/targets/{{ app.name }}.json"
+    owner: deploy
+    group: deploy
+    mode: "0644"
+  when: app.port is defined
+
+# --- Postgres role + DB (idempotent) ----------------------------------
+
+- name: "[{{ app.name }}] Check if Postgres role exists"
+  command: docker exec postgres psql -U {{ postgres_user | default('postgres') }} -tAc "SELECT 1 FROM pg_roles WHERE rolname='{{ app.name }}'"
+  register: pg_role_exists
+  changed_when: false
+  when: app.needs_database | default(false)
+
+- name: "[{{ app.name }}] Create Postgres role"
+  command: >-
+    docker exec postgres psql -U {{ postgres_user | default('postgres') }}
+      -c "CREATE ROLE \"{{ app.name }}\" WITH LOGIN PASSWORD '{{ lookup('vars', app.name + '_db_password') }}'"
+  when:
+    - app.needs_database | default(false)
+    - pg_role_exists.stdout != "1"
+  no_log: true
+
+- name: "[{{ app.name }}] Check if Postgres database exists"
+  command: docker exec postgres psql -U {{ postgres_user | default('postgres') }} -tAc "SELECT 1 FROM pg_database WHERE datname='{{ app.name }}'"
+  register: pg_db_exists
+  changed_when: false
+  when: app.needs_database | default(false)
+
+- name: "[{{ app.name }}] Create Postgres database"
+  command: >-
+    docker exec postgres psql -U {{ postgres_user | default('postgres') }}
+      -c "CREATE DATABASE \"{{ app.name }}\" OWNER \"{{ app.name }}\""
+  when:
+    - app.needs_database | default(false)
+    - pg_db_exists.stdout != "1"
+
+# --- Image pull + compose up -----------------------------------------
+
+- name: "[{{ app.name }}] Pull app image"
+  community.docker.docker_compose_v2_pull:
+    project_src: "{{ server_apps_dir }}/{{ app.name }}"
+
+- name: "[{{ app.name }}] docker compose up -d"
+  community.docker.docker_compose_v2:
+    project_src: "{{ server_apps_dir }}/{{ app.name }}"
+    state: present
+    remove_orphans: true

@@ -1,0 +1,26 @@
+---
+# Full provision + configure of a VM. Idempotent: re-running enforces
+# desired state. Limit to one env at a time:
+#
+#   ansible-playbook playbooks/site.yml --limit uat
+#   ansible-playbook playbooks/site.yml --limit prod
+#
+# Or target a single host:
+#   ansible-playbook playbooks/site.yml --limit uat-vm
+
+- name: Provision VM and bring up infrastructure stack
+  hosts: all
+  remote_user: deploy
+  become: true
+  vars_files:
+    - ../secrets.yml
+  roles:
+    - role: base               # OS hardening, deploy user, Docker, swap, ufw
+    - role: tailscale          # Tailscale install + expose tailscale_ip fact
+    - role: ssl                # certbot DNS-01 + per-zone cert lineages
+    - role: postgres           # postgres config (init scripts) — no start
+    - role: observability      # grafana/loki/tempo/prometheus/promtail configs
+    - role: nginx              # nginx config + infra docker-compose + up
+    - role: fail2ban           # filters, jails, multi-zone CF ban action
+    - role: origin_lockdown    # ufw 80/443 → CF CIDRs (Prod-only)
+    - role: apps               # deploy every app listed in group_vars/all.yml

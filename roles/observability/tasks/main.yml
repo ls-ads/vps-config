@@ -1,0 +1,61 @@
+---
+# observability role — copy static config files for the LGTM stack
+# (Loki / Grafana / Tempo / Prometheus + Promtail) onto the VM. No
+# container lifecycle here; the nginx role does the `docker compose up`
+# that brings the whole infra stack online.
+
+- name: Ensure observability config dirs exist on the VM
+  file:
+    path: "{{ server_infra_dir }}/{{ item }}"
+    state: directory
+    owner: deploy
+    group: deploy
+    mode: "0755"
+  loop:
+    - grafana
+    - grafana/provisioning
+    - loki
+    - tempo
+    - prometheus
+    - prometheus/targets     # apps role drops per-app scrape targets here
+    - promtail
+
+- name: Sync Grafana provisioning (datasources + dashboards)
+  ansible.posix.synchronize:
+    src: "{{ playbook_dir }}/../infrastructure/grafana/provisioning/"
+    dest: "{{ server_infra_dir }}/grafana/provisioning/"
+    delete: false             # preserve dashboards added out-of-band
+    rsync_opts:
+      - "--chmod=D755,F644"
+
+- name: Sync Loki config
+  copy:
+    src: "{{ playbook_dir }}/../infrastructure/loki/loki-config.yml"
+    dest: "{{ server_infra_dir }}/loki/loki-config.yml"
+    owner: deploy
+    group: deploy
+    mode: "0644"
+
+- name: Sync Tempo config
+  copy:
+    src: "{{ playbook_dir }}/../infrastructure/tempo/tempo-config.yml"
+    dest: "{{ server_infra_dir }}/tempo/tempo-config.yml"
+    owner: deploy
+    group: deploy
+    mode: "0644"
+
+- name: Sync Prometheus config
+  copy:
+    src: "{{ playbook_dir }}/../infrastructure/prometheus/prometheus.yml"
+    dest: "{{ server_infra_dir }}/prometheus/prometheus.yml"
+    owner: deploy
+    group: deploy
+    mode: "0644"
+
+- name: Sync Promtail config
+  copy:
+    src: "{{ playbook_dir }}/../infrastructure/promtail/promtail-config.yml"
+    dest: "{{ server_infra_dir }}/promtail/promtail-config.yml"
+    owner: deploy
+    group: deploy
+    mode: "0644"
