@@ -101,5 +101,5 @@
   community.docker.docker_compose_v2:
     project_src: "{{ server_infra_dir }}"
     state: present
-    remove_orphans: true   # drops authelia/redis containers left from old setup
+    remove_orphans: true
   notify: reload nginx
