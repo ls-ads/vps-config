@@ -10,3 +10,15 @@ public_web_ports_open: true
 enable_origin_lockdown: true
 
 enable_fail2ban: true
+
+# Optional: Prod-only extra DNS records. Put records here (instead of
+# group_vars/all.yml) when their target is the Prod VM — `ansible_host`
+# resolves to the Prod public IP only when this file is loaded. Common
+# case: a `www` alias next to the apex.
+#
+# dns_extra_records:
+#   - domain: example.com
+#     name: www.example.com
+#     type: A
+#     content: "{{ ansible_host }}"
+#     proxied: true

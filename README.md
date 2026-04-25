@@ -101,19 +101,26 @@ the role creates / updates:
 
 | Record | Target | Proxy |
 |---|---|---|
-| `ssh.<env_prefix><apex>` per zone | VM public IP (`ansible_host`) | DNS-only |
-| App FQDNs (apex + per-app `subdomain.`) on **Prod** | Prod VM public IP | **Proxied** |
-| App FQDNs on **UAT** | UAT VM **Tailscale** IP | DNS-only |
-| `<tool>.<ops>.<env_prefix><apex>` per (zone × ops_tool) | VM Tailscale IP | DNS-only |
+| `ssh.<env_prefix><base_domain>` per zone | VM public IP (`ansible_host`) | DNS-only |
+| App FQDNs on **Prod** (`<base_domain>` or `<subdomain>.<base_domain>`) | Prod VM public IP | **Proxied** |
+| App FQDNs on **UAT** (`uat.<base_domain>` or `<subdomain>.uat.<base_domain>`) | UAT VM **Tailscale** IP | DNS-only |
+| `<tool>.<ops_subdomain>.<env_prefix><base_domain>` per (zone × ops_tool) | VM Tailscale IP | DNS-only |
 
 Tailscale IPs can't be proxied (CF refuses), so every record pointing
 at `100.x.x.x` is DNS-only by design.
 
 Need extra records the auto-derivation doesn't cover (e.g. `www`
-aliases, MX, SPF/DKIM TXT)? Declare them under `dns_extra_records:`
-in `inventory/group_vars/all.yml`:
+aliases, MX, SPF/DKIM TXT)? Declare them under `dns_extra_records:`.
+Where you put the list matters: `group_vars/all.yml` for env-agnostic
+records (an external MX, a verification TXT), `group_vars/prod.yml`
+or `group_vars/uat.yml` for env-specific ones. Anything that
+references `ansible_host` or `tailscale_ip` is env-specific — putting
+it in `all.yml` means whichever VM ran last wins, so a `www` alias
+in `all.yml` would get rewritten to the UAT public IP on every UAT
+run. Example, scoped to Prod:
 
 ```yaml
+# inventory/group_vars/prod.yml
 dns_extra_records:
   - domain: example.com           # zone (must match a name in `domains`)
     name: www.example.com

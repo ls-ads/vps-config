@@ -75,17 +75,22 @@ apps:
 
 # Optional: extra DNS records the cloudflare_dns role should maintain
 # alongside the auto-derived set (apps, ops endpoints, ssh.<env>).
-# Useful for `www` aliases, MX, SPF/DKIM TXT, etc. Each entry is a
-# dict; `proxied` is ignored for non-A/AAAA/CNAME types.
+# Each entry is a dict; `proxied` is ignored for non-A/AAAA/CNAME types.
+#
+# Put env-agnostic records here — external MX hosts, verification TXTs,
+# SPF/DKIM, etc. Records that reference `ansible_host` or `tailscale_ip`
+# are env-specific (different value on each VM) and belong in
+# group_vars/prod.yml or group_vars/uat.yml instead, otherwise whichever
+# VM ran last will overwrite the others' record.
 #
 # dns_extra_records:
-#   - domain: example.com           # zone (must match a name in `domains`)
-#     name: www.example.com
-#     type: A
-#     content: "{{ ansible_host }}"
-#     proxied: true
 #   - domain: example.org
 #     name: example.org
 #     type: MX
 #     content: "10 mail.elsewhere.net"
+#     proxied: false
+#   - domain: example.com
+#     name: example.com
+#     type: TXT
+#     content: "v=spf1 include:_spf.elsewhere.net ~all"
 #     proxied: false

@@ -12,15 +12,11 @@
 #     proxied: true | false      # ignored for non-A/AAAA/CNAME
 #     comment: "<optional note>" # surfaced in the CF dashboard
 #
-# Useful for `www` aliases, MX records pointing at an external mail
-# host, verification TXTs, etc. Example:
-#
-#   dns_extra_records:
-#     - domain: example.com
-#       name: www.example.com
-#       type: A
-#       content: "{{ ansible_host }}"
-#       proxied: true
+# Place env-agnostic records (external MX, verification TXT, SPF/DKIM)
+# in group_vars/all.yml. Place env-specific records — anything whose
+# `content` references `ansible_host` or `tailscale_ip` — in
+# group_vars/prod.yml or group_vars/uat.yml; otherwise the last VM to
+# run overwrites the others' record.
 dns_extra_records: []
 
 # Marker stamped on every record this role manages. Used to identify
