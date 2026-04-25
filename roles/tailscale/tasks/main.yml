@@ -126,47 +126,11 @@
   register: tailscale_ip_lookup
   changed_when: false
 
-- name: Set tailscale_ip fact (cacheable — nginx + ssl roles rely on it)
+- name: Set tailscale_ip fact (cacheable — nginx + ssl + cloudflare_dns roles rely on it)
   set_fact:
     tailscale_ip: "{{ tailscale_ip_lookup.stdout_lines[0] }}"
     cacheable: true
 
-# --- Status summary -------------------------------------------------------
-# One-shot reminder of which DNS records the operator needs to maintain
-# in Cloudflare pointing at this IP. Derived from apps + ops_tools +
-# env_prefix so the list stays correct as config changes.
-
-- name: Initialize ops DNS targets
-  set_fact:
-    _tailscale_ops_targets: []
-
-- name: Compute ops-tool DNS targets (one per (domain × tool))
-  set_fact:
-    _tailscale_ops_targets: "{{ _tailscale_ops_targets + [item.0.name + '.' + ops_subdomain + '.' + env_prefix + item.1.name] }}"
-  loop: "{{ ops_tools | product(domains) | list }}"
-
-- name: Initialize app DNS targets (UAT only — apps are Tailscale-gated there)
-  set_fact:
-    _tailscale_app_targets: []
-  when: env == 'uat'
-
-- name: Compute app DNS targets (UAT)
-  set_fact:
-    _tailscale_app_targets: "{{ _tailscale_app_targets + [( ((item.subdomain | default('')) + '.') if (item.subdomain | default('') != '') else '' ) + env_prefix + item.base_domain] }}"
-  loop: "{{ apps }}"
-  when: env == 'uat'
-
-- name: Combine into tailscale_dns_targets
-  set_fact:
-    tailscale_dns_targets: "{{ _tailscale_ops_targets + (_tailscale_app_targets | default([])) }}"
-
-- name: Show DNS records that should resolve to this Tailscale IP
+- name: Show this VM's Tailscale IP
   debug:
-    msg: |
-      tailscale0 IP for {{ inventory_hostname }} ({{ env }}): {{ tailscale_ip }}
-
-      Ensure the following Cloudflare A records resolve here (DNS-only,
-      grey cloud — Tailscale IPs can't be proxied):
-
-      {% for d in tailscale_dns_targets %}  - {{ d }}
-      {% endfor %}
+    msg: "tailscale0 IP for {{ inventory_hostname }} ({{ env }}): {{ tailscale_ip }} — DNS records pointing here are managed by the cloudflare_dns role."

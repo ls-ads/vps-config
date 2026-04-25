@@ -89,28 +89,42 @@ Your fork owns `inventory/`, `secrets.yml`, and
 ### 2. Configure Cloudflare DNS
 
 Add each of your domains to Cloudflare and point your registrar's
-nameservers at the CF nameservers Cloudflare gave you. Then create the
-records below per environment:
+nameservers at the CF nameservers Cloudflare gave you. Set the SSL/TLS
+mode to **"Full (strict)"** for each zone (dashboard → SSL/TLS →
+Overview) — the `ssl` role issues real Let's Encrypt certs at the
+origin and Full (strict) validates them.
 
-| Type | Name | Content | Proxy |
-|---|---|---|---|
-| A | `ssh` (per env apex) | VM public IP | **DNS only** (grey) |
-| A | Prod app domains (e.g. `@`, `www`, `@` on other zones) | Prod VM public IP | **Proxied** (orange) |
-| A | Prod `ops.<apex>` wildcard (`*.ops`) | Prod VM **Tailscale** IP | **DNS only** (grey) |
-| A | UAT app domains (e.g. `uat`) | UAT VM **Tailscale** IP | **DNS only** (grey) |
-| A | UAT `ops.uat.<apex>` wildcard (`*.ops.uat`) | UAT VM **Tailscale** IP | **DNS only** (grey) |
+DNS A records are auto-managed by the `cloudflare_dns` role on every
+`site.yml` run, using the per-zone DNS API token from `secrets.yml`
+(the same token certbot uses for the DNS-01 challenge). For each VM
+the role creates / updates:
 
-Two important rules:
+| Record | Target | Proxy |
+|---|---|---|
+| `ssh.<env_prefix><apex>` per zone | VM public IP (`ansible_host`) | DNS-only |
+| App FQDNs (apex + per-app `subdomain.`) on **Prod** | Prod VM public IP | **Proxied** |
+| App FQDNs on **UAT** | UAT VM **Tailscale** IP | DNS-only |
+| `<tool>.<ops>.<env_prefix><apex>` per (zone × ops_tool) | VM Tailscale IP | DNS-only |
 
-- **`ssh.<apex>` must be DNS-only** (grey cloud). SSH doesn't pass through
-  the CF proxy; this record lets you bypass the proxy for SSH + Ansible
-  connections.
-- **Tailscale IPs can't be proxied.** Anything pointed at `100.x.x.x` has
-  to be DNS-only (grey cloud) — CF won't accept the record as proxied.
+Tailscale IPs can't be proxied (CF refuses), so every record pointing
+at `100.x.x.x` is DNS-only by design.
 
-> **Set CF SSL/TLS mode to "Full (strict)"** for each zone (dashboard →
-> SSL/TLS → Overview). The `ssl` role issues real Let's Encrypt certs
-> at the origin; Full (strict) validates them.
+Need extra records the auto-derivation doesn't cover (e.g. `www`
+aliases, MX, SPF/DKIM TXT)? Declare them under `dns_extra_records:`
+in `inventory/group_vars/all.yml`:
+
+```yaml
+dns_extra_records:
+  - domain: example.com           # zone (must match a name in `domains`)
+    name: www.example.com
+    type: A
+    content: "{{ ansible_host }}"
+    proxied: true
+```
+
+The role only creates / updates records — it never deletes. If you
+remove an app or domain, clean up its DNS records by hand (or in the
+CF dashboard) once.
 
 ### 3. Mint API tokens
 
@@ -186,17 +200,17 @@ as `deploy`.
 
 ### 6. Provision the VM (site.yml)
 
-Runs every role in order: base (OS / Docker) → tailscale → ssl →
-postgres config → observability config → nginx + infra compose up →
-fail2ban → origin_lockdown → apps.
+Runs every role in order: base (OS / Docker) → tailscale →
+cloudflare_dns → ssl → postgres config → observability config →
+nginx + infra compose up → fail2ban → origin_lockdown → apps.
 
 ```bash
 ./ansible playbooks/site.yml --limit uat
 ```
 
-Takes ~10 minutes on a fresh VM. The Ansible output prints the
-Tailscale IP near the end — create the matching DNS A records in CF
-per step 2.
+Takes ~10 minutes on a fresh VM. DNS records (apps, ops endpoints,
+`ssh.*`) are upserted via the Cloudflare API during the
+`cloudflare_dns` step — no manual record creation needed.
 
 ### 7. Verify
 
@@ -315,6 +329,7 @@ vps-config/
 ├── roles/
 │   ├── base/                        # OS hardening, Docker, ufw, swap
 │   ├── tailscale/                   # install + auth + expose tailscale_ip
+│   ├── cloudflare_dns/              # auto-manage A records (apps, ops, ssh.*)
 │   ├── ssl/                         # certbot DNS-01, per-domain cert lineages
 │   ├── postgres/                    # init-databases.sh render
 │   ├── observability/               # LGTM config sync
@@ -335,7 +350,8 @@ vps-config/
 | `playbooks/site.yml` | Full provision. Runs every role in order. Idempotent. |
 | `playbooks/deploy_app.yml` | Single-app redeploy (image pull + compose up). |
 | `roles/base` | Base packages, swap, Docker install, ufw baseline, GHCR login. |
-| `roles/tailscale` | Install + authenticate via auth key. Prints DNS records you need. |
+| `roles/tailscale` | Install + authenticate via auth key. Exposes `tailscale_ip` host fact. |
+| `roles/cloudflare_dns` | Upserts A records for apps + ops endpoints + `ssh.*` via the CF API. |
 | `roles/ssl` | One cert lineage per domain via DNS-01. Self-signed placeholder for first run. |
 | `roles/postgres` | Renders `init-databases.sh` (creates per-app DB + role on fresh volume). |
 | `roles/observability` | Copies LGTM configs to `/opt/server/infrastructure/`. |

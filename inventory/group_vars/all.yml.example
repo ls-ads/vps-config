@@ -72,3 +72,20 @@ apps:
     needs_jwt: false
     # env:
     #   DATABASE_URL: "postgresql://myapp:{{ myapp_db_password }}@postgres:5432/myapp"
+
+# Optional: extra DNS records the cloudflare_dns role should maintain
+# alongside the auto-derived set (apps, ops endpoints, ssh.<env>).
+# Useful for `www` aliases, MX, SPF/DKIM TXT, etc. Each entry is a
+# dict; `proxied` is ignored for non-A/AAAA/CNAME types.
+#
+# dns_extra_records:
+#   - domain: example.com           # zone (must match a name in `domains`)
+#     name: www.example.com
+#     type: A
+#     content: "{{ ansible_host }}"
+#     proxied: true
+#   - domain: example.org
+#     name: example.org
+#     type: MX
+#     content: "10 mail.elsewhere.net"
+#     proxied: false

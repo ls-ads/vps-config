@@ -1,0 +1,72 @@
+---
+# Per-record upsert helper, called from main.yml with `cf_record` set
+# to one entry from cf_desired_records. Resolves the domain → zone_id
+# + DNS API token, looks up any existing record with the same (type,
+# name), and POSTs / PUTs / no-ops as appropriate. All API calls run
+# from the controller (delegate_to: localhost) — Cloudflare's API has
+# no need to live on the managed VM.
+
+- name: "[{{ cf_record.name }}] Resolve domain → zone_id + token"
+  set_fact:
+    _cf_zone_id: "{{ (domains | selectattr('name', 'equalto', cf_record.domain) | list | first).zone_id }}"
+    _cf_token:   "{{ lookup('vars', (domains | selectattr('name', 'equalto', cf_record.domain) | list | first).dns_vault_key) }}"
+  no_log: true
+
+- name: "[{{ cf_record.name }}] Look up any existing record with this (type, name)"
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ _cf_zone_id }}/dns_records?type={{ cf_record.type }}&name={{ cf_record.name }}"
+    headers:
+      Authorization: "Bearer {{ _cf_token }}"
+    return_content: true
+  register: _cf_lookup
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: "[{{ cf_record.name }}] Pick the first existing record (if any)"
+  set_fact:
+    _cf_existing: "{{ (_cf_lookup.json.result | default([])) | first | default({}) }}"
+
+- name: "[{{ cf_record.name }}] Create record (none exists)"
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ _cf_zone_id }}/dns_records"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _cf_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      type:    "{{ cf_record.type }}"
+      name:    "{{ cf_record.name }}"
+      content: "{{ cf_record.content }}"
+      proxied: "{{ cf_record.proxied | default(false) | bool }}"
+      ttl:     1
+      comment: "{{ cf_record.comment | default(cloudflare_dns_managed_marker) }}"
+  when: _cf_existing == {}
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: "[{{ cf_record.name }}] Update record (drift in content / proxied / type)"
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ _cf_zone_id }}/dns_records/{{ _cf_existing.id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ _cf_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      type:    "{{ cf_record.type }}"
+      name:    "{{ cf_record.name }}"
+      content: "{{ cf_record.content }}"
+      proxied: "{{ cf_record.proxied | default(false) | bool }}"
+      ttl:     1
+      comment: "{{ cf_record.comment | default(cloudflare_dns_managed_marker) }}"
+  when:
+    - _cf_existing != {}
+    - (_cf_existing.content | default(''))           != cf_record.content
+       or (_cf_existing.proxied | default(false))    != (cf_record.proxied | default(false) | bool)
+       or (_cf_existing.type    | default(''))       != cf_record.type
+  delegate_to: localhost
+  become: false
+  no_log: true

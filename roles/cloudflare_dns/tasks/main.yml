@@ -1,0 +1,120 @@
+---
+# cloudflare_dns role — auto-manages Cloudflare A records for every
+# FQDN this VM serves, so the operator doesn't maintain them by hand.
+#
+# Records derived from existing config:
+#   * ssh.<env_prefix><apex>           per `domains` entry  → ansible_host
+#                                                            DNS-only.
+#   * <subdomain.>?<env_prefix><apex>  per `apps` entry     → ansible_host
+#                                                            (Prod, proxied)
+#                                                            or tailscale_ip
+#                                                            (UAT, DNS-only).
+#   * <tool>.<ops>.<env_prefix><apex>  per (domain × ops_tool) → tailscale_ip
+#                                                            DNS-only.
+#
+# Plus anything in `dns_extra_records` (group_vars/all.yml) for things
+# the auto-derivation can't infer (e.g. www aliases, MX, TXT).
+#
+# Auth: the same per-zone Zone:DNS:Edit token the SSL role uses for
+# the DNS-01 challenge — referenced via `domain.dns_vault_key`.
+#
+# Idempotent. Each record is upserted (POST if absent, PUT on drift,
+# no-op on match). Records this role created are stamped with
+# `cloudflare_dns_managed_marker` in the CF "comment" field, so
+# operators can tell hand-managed records apart from ours.
+
+# --- Sanity checks --------------------------------------------------
+
+- name: Assert tailscale_ip is set (set by tailscale role earlier in site.yml)
+  assert:
+    that:
+      - tailscale_ip is defined
+      - tailscale_ip | length > 0
+    fail_msg: >-
+      cloudflare_dns runs after the tailscale role; tailscale_ip should
+      already be a host fact. If you're calling this role directly,
+      include the tailscale role first.
+
+- name: Assert ansible_host looks like an IPv4 (record content must be one)
+  assert:
+    that:
+      - ansible_host is defined
+      - ansible_host is match('^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
+    fail_msg: >-
+      ansible_host ({{ ansible_host | default('<unset>') }}) must be an
+      IPv4 literal — the cloudflare_dns role uses it as the public-IP
+      target for ssh.* and Prod app A records.
+
+# --- Compute the desired record set ---------------------------------
+
+- name: Initialize desired records list
+  set_fact:
+    cf_desired_records: []
+
+- name: Add ssh.* convenience record per zone
+  set_fact:
+    cf_desired_records: "{{ cf_desired_records + [
+      {
+        'domain':  item.name,
+        'name':    'ssh.' ~ env_prefix ~ item.name,
+        'type':    'A',
+        'content': ansible_host,
+        'proxied': false,
+      }
+    ] }}"
+  loop: "{{ domains }}"
+  loop_control:
+    label: "ssh.{{ env_prefix }}{{ item.name }}"
+
+- name: Add app FQDNs (Prod = public IP proxied; UAT = Tailscale IP DNS-only)
+  set_fact:
+    cf_desired_records: "{{ cf_desired_records + [
+      {
+        'domain':  item.base_domain,
+        'name':    ((item.subdomain ~ '.') if (item.subdomain is defined and item.subdomain) else '') ~ env_prefix ~ item.base_domain,
+        'type':    'A',
+        'content': (ansible_host if env == 'prod' else tailscale_ip),
+        'proxied': (env == 'prod'),
+      }
+    ] }}"
+  loop: "{{ apps }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Add ops-tool endpoints per (domain × tool), Tailscale-only
+  set_fact:
+    cf_desired_records: "{{ cf_desired_records + [
+      {
+        'domain':  item.0.name,
+        'name':    item.1.name ~ '.' ~ ops_subdomain ~ '.' ~ env_prefix ~ item.0.name,
+        'type':    'A',
+        'content': tailscale_ip,
+        'proxied': false,
+      }
+    ] }}"
+  loop: "{{ domains | product(ops_tools) | list }}"
+  loop_control:
+    label: "{{ item.1.name }}.{{ ops_subdomain }}.{{ env_prefix }}{{ item.0.name }}"
+
+- name: Append user-declared extra records
+  set_fact:
+    cf_desired_records: "{{ cf_desired_records + (dns_extra_records | default([])) }}"
+
+# --- Per-record upsert ----------------------------------------------
+
+- name: Upsert each desired record
+  include_tasks: upsert_record.yml
+  loop: "{{ cf_desired_records }}"
+  loop_control:
+    loop_var: cf_record
+    label: "{{ cf_record.name }} {{ cf_record.type }} → {{ cf_record.content }} ({{ 'proxied' if cf_record.proxied | default(false) else 'DNS-only' }})"
+
+# --- Summary --------------------------------------------------------
+
+- name: Show records managed by this role
+  debug:
+    msg: |
+      Cloudflare DNS records ensured for {{ inventory_hostname }} ({{ env }}):
+
+      {% for r in cf_desired_records %}  - {{ r.name }} {{ r.type }} → {{ r.content }} ({{ 'proxied' if r.proxied | default(false) else 'DNS-only' }})
+      {% endfor %}

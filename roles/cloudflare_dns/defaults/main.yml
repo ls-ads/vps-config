@@ -1,0 +1,29 @@
+---
+# cloudflare_dns role defaults.
+
+# Optional list of additional A / CNAME / TXT records to maintain
+# alongside the auto-derived ones (apps, ops endpoints, ssh.<env>).
+# Each entry is a dict; same shape the role uses internally:
+#
+#   - domain:  <zone apex — must match a name in `domains`>
+#     name:    <FQDN>
+#     type:    A | CNAME | TXT | MX | ...
+#     content: <target>
+#     proxied: true | false      # ignored for non-A/AAAA/CNAME
+#     comment: "<optional note>" # surfaced in the CF dashboard
+#
+# Useful for `www` aliases, MX records pointing at an external mail
+# host, verification TXTs, etc. Example:
+#
+#   dns_extra_records:
+#     - domain: example.com
+#       name: www.example.com
+#       type: A
+#       content: "{{ ansible_host }}"
+#       proxied: true
+dns_extra_records: []
+
+# Marker stamped on every record this role manages. Used to identify
+# our records when listing the zone (CF surfaces it in the dashboard
+# under each record's "Comment" field).
+cloudflare_dns_managed_marker: "managed by ansible (cloudflare_dns role)"
