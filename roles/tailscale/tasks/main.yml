@@ -44,9 +44,22 @@
   changed_when: false
   failed_when: false
 
+- name: Determine current tailnet name (strip the magic-DNS suffix)
+  set_fact:
+    current_tailnet_name: >-
+      {{
+        ((tailscale_state.stdout | from_json).Self.DNSName | default('')).split('.')[0]
+      }}
+  when: tailscale_state.rc == 0
+
 - name: Compute whether re-auth is needed
   set_fact:
-    needs_tailscale_auth: "{{ tailscale_state.rc != 0 or (tailscale_state.stdout | from_json).BackendState != 'Running' }}"
+    needs_tailscale_auth: >-
+      {{
+        tailscale_state.rc != 0
+        or (tailscale_state.stdout | from_json).BackendState | default('') != 'Running'
+        or (current_tailnet_name | default('')) != tailscale_hostname
+      }}
 
 # --- Reclaim hostname (optional) -----------------------------------------
 # When this VM has just been rebuilt, the previous machine entry in the
@@ -59,6 +72,13 @@
 #
 # Mint an API access token at https://login.tailscale.com/admin/settings/keys
 # (type: "API access" — distinct from the auth key used for `tailscale up`).
+
+- name: Log out before re-auth so the API delete + tailscale up can claim the canonical name
+  command: tailscale logout
+  when:
+    - needs_tailscale_auth
+    - (tailscale_state.stdout | from_json).BackendState | default('') == 'Running'
+  changed_when: true
 
 - name: Reclaim tailnet hostname before re-auth (delete stale devices)
   when:
