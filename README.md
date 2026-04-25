@@ -49,7 +49,8 @@ your tailnet.
 
 ## Requirements
 
-- **Workstation**: Docker (24+) and an SSH keypair (`~/.ssh/id_ed25519`).
+- **Workstation**: Docker (24+) **running** (verify with `docker info`)
+  and an SSH keypair (`~/.ssh/id_ed25519`).
 - **VMs**: Ubuntu 24.04 (Noble), ~4 cores / 8 GB RAM / ~75 GB disk, one
   per environment. Root SSH must be enabled at first boot (it's
   disabled by the bootstrap playbook). Hetzner Cloud / DigitalOcean /
@@ -94,7 +95,7 @@ mode to **"Full (strict)"** for each zone (dashboard → SSL/TLS →
 Overview) — the `ssl` role issues real Let's Encrypt certs at the
 origin and Full (strict) validates them.
 
-DNS A records are auto-managed by the `cloudflare_dns` role on every
+DNS records are auto-managed by the `cloudflare_dns` role on every
 `site.yml` run, using the per-zone DNS API token from `secrets.yml`
 (the same token certbot uses for the DNS-01 challenge). For each VM
 the role creates / updates:
@@ -205,6 +206,17 @@ installs your SSH key, and disables root SSH + password auth.
 needed. From this point forward `site.yml` + `deploy_app.yml` connect
 as `deploy`.
 
+> **Rebuilt the VM at the same IP?** Your local `~/.ssh/known_hosts`
+> still has the previous host's key, so any direct `ssh` will fail
+> with "REMOTE HOST IDENTIFICATION HAS CHANGED!". Ansible itself is
+> unaffected (the runner uses `StrictHostKeyChecking=accept-new` +
+> `UserKnownHostsFile=/dev/null`), but clear the stale entry on your
+> workstation before the verify-step `ssh` calls below:
+>
+> ```bash
+> ssh-keygen -R <vm-public-ip>
+> ```
+
 ### 6. Provision the VM (site.yml)
 
 Runs every role in order: base (OS / Docker) → tailscale →
@@ -215,21 +227,29 @@ nginx + infra compose up → fail2ban → origin_lockdown → apps.
 ./ansible playbooks/site.yml --limit uat
 ```
 
-Takes ~10 minutes on a fresh VM. DNS records (apps, ops endpoints,
-`ssh.*`) are upserted via the Cloudflare API during the
-`cloudflare_dns` step — no manual record creation needed.
+Takes ~5–10 minutes on a fresh VM (most of the time is in apt
+installs and certbot's DNS-01 propagation waits). DNS records
+(apps, ops endpoints, `ssh.*`) are upserted via the Cloudflare API
+during the `cloudflare_dns` step — no manual record creation needed.
 
 ### 7. Verify
 
-```bash
-# SSH as deploy
-ssh deploy@ssh.<infra-domain> 'docker ps'
+The `cloudflare_dns` role created `ssh.<env_prefix><base_domain>` for
+every entry in `domains:`, all pointing at the VM's public IP. Pick
+any one of those zones for the SSH-based checks below — e.g. on UAT
+with a `domains` entry of `example.com`, that's `ssh.uat.example.com`.
 
-# Tailscale should show the VM
-tailscale status | grep <env>-vm
+```bash
+# SSH as deploy (substitute one of your auto-created ssh.* records)
+ssh deploy@ssh.uat.example.com 'docker ps'
+
+# Tailscale should show the VM with the canonical hostname (uat-vm /
+# prod-vm), not an incremented variant — the tailscale role's API
+# delete + re-auth reclaims the name on every rebuild.
+tailscale status | grep uat-vm
 
 # SSL issued for each zone
-ssh deploy@ssh.<infra-domain> 'ls /etc/letsencrypt/live/'
+ssh deploy@ssh.uat.example.com 'ls /etc/letsencrypt/live/'
 
 # Hit an ops endpoint from your Tailscale-connected laptop
 curl -I https://grafana.ops.uat.example.com/
