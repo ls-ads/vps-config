@@ -7,9 +7,17 @@
 # across them. Use to scale single-threaded SSR or workers
 # horizontally on a single VM (Postgres + Redis are still single
 # instances; size their connection pools accordingly).
+#
+# Each replica also registers the bare app name (`<app>`) as a docker
+# network alias. Other containers on the same network can keep using
+# `http://<app>:<port>` and Docker's embedded DNS round-robins
+# across the replica IPs. Without this, code that hard-coded the old
+# single-container hostname (e.g. SvelteKit → FastAPI proxy) would
+# break with `fetch failed` after the first replica scale-up.
 
 services:
 {% set replicas = app.replicas | default(1) | int %}
+{% set net = infra_network_name | default('infra') %}
 {% for i in range(1, replicas + 1) %}
 {%   set svc = app.name if replicas == 1 else (app.name ~ '-' ~ i) %}
   {{ svc }}:
@@ -19,10 +27,16 @@ services:
     env_file:
       - .env
     networks:
-      - {{ infra_network_name | default('infra') }}
+{%   if replicas > 1 %}
+      {{ net }}:
+        aliases:
+          - {{ app.name }}
+{%   else %}
+      - {{ net }}
+{%   endif %}
 {% endfor %}
 
 networks:
-  {{ infra_network_name | default('infra') }}:
+  {{ net }}:
     external: true
-    name: {{ infra_network_name | default('infra') }}
+    name: {{ net }}
