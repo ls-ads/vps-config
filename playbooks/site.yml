@@ -18,6 +18,7 @@
     - role: base               # OS hardening, deploy user, Docker, swap, ufw
     - role: tailscale          # Tailscale install + expose tailscale_ip fact
     - role: cloudflare_dns     # auto-manage A records (apps, ops, ssh.*) via CF API
+    - role: cloudflare_cache   # cache rules + zone settings per cache-enabled app
     - role: ssl                # certbot DNS-01 + per-zone cert lineages
     - role: postgres           # postgres config (init scripts) — no start
     - role: observability      # grafana/loki/tempo/prometheus/promtail configs

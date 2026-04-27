@@ -1,0 +1,153 @@
+---
+# Sync one zone: collects every cache-enabled app on this domain, builds
+# the corresponding Cloudflare ruleset, and applies. `_cf_zone_name`
+# is set by the loop in main.yml.
+
+- name: "[{{ _cf_zone_name }}] Resolve zone_id + token"
+  set_fact:
+    _cf_zone:    "{{ domains | selectattr('name', 'equalto', _cf_zone_name) | first }}"
+  no_log: true
+
+- name: "[{{ _cf_zone_name }}] Pick the API token from secrets.yml"
+  set_fact:
+    _cf_zone_id: "{{ _cf_zone.zone_id }}"
+    _cf_token:   "{{ lookup('vars', _cf_zone.cache_vault_key) }}"
+  no_log: true
+
+- name: "[{{ _cf_zone_name }}] Effective zone settings (defaults + domain override)"
+  set_fact:
+    _cf_zone_settings: >-
+      {{ cloudflare_cache_default_settings | combine(_cf_zone.cache_settings | default({})) }}
+
+# --- Zone-wide settings -----------------------------------------------------
+# CF exposes /zones/{id}/settings/{name} for each setting. Values are
+# small (strings or "on"/"off"). One PATCH per setting; idempotent
+# (PATCH always succeeds even if the value matches).
+
+- name: "[{{ _cf_zone_name }}] Apply zone settings"
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ _cf_zone_id }}/settings/{{ item.key }}"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ _cf_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      value: "{{ item.value }}"
+    status_code: [200, 400]   # 400 if the setting isn't enabled on this plan
+  delegate_to: localhost
+  become: false
+  loop: "{{ _cf_zone_settings | dict2items }}"
+  loop_control:
+    label: "{{ item.key }} = {{ item.value }}"
+  no_log: true
+
+# --- Cache rules ------------------------------------------------------------
+# CF exposes per-zone "phases" of rules; cache rules go in the
+# http_request_cache_settings phase. We replace the entire ruleset
+# each run with the one we computed from `apps`.
+
+- name: "[{{ _cf_zone_name }}] Build the cache rules from cache-enabled apps"
+  set_fact:
+    _cf_cache_rules: >-
+      {{
+        apps
+        | selectattr('cache', 'defined')
+        | selectattr('cache.enabled', 'defined')
+        | selectattr('cache.enabled')
+        | selectattr('base_domain', 'equalto', _cf_zone_name)
+        | map('combine', {'_app_host': (env_prefix | default('')) ~ _cf_zone_name})
+        | list
+      }}
+
+- name: "[{{ _cf_zone_name }}] Render each app's bypass + cache rule"
+  set_fact:
+    _cf_rendered_rules: >-
+      {{
+        _cf_cache_rules
+        | map('community.general.dict_kv', 'app')
+        | map('combine', {})
+        | list
+      }}
+  when: false  # placeholder — actual rendering happens in Jinja below
+
+# Build the JSON ruleset payload. Two rules per app: one bypass (matched
+# first), one cache (matched second). Cloudflare evaluates rules in order;
+# bypass wins.
+- name: "[{{ _cf_zone_name }}] Compose ruleset body"
+  set_fact:
+    _cf_ruleset_body:
+      rules: "{{ _cf_rules_list }}"
+  vars:
+    _cf_rules_list: >-
+      {%- set rules = [] -%}
+      {%- for app in _cf_cache_rules -%}
+        {# Bypass rule (must come first; CF evaluates top-down) #}
+        {%- set bypass_paths = app.cache.routes_bypassed | default([]) -%}
+        {%- if bypass_paths | length > 0 -%}
+          {%- set bypass_expr = [] -%}
+          {%- for p in bypass_paths -%}
+            {%- if p.endswith('/*') -%}
+              {%- set _ = bypass_expr.append('starts_with(http.request.uri.path, "' ~ p[:-1] ~ '")') -%}
+            {%- else -%}
+              {%- set _ = bypass_expr.append('http.request.uri.path eq "' ~ p ~ '"') -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {%- set _ = rules.append({
+            'description': 'bypass cache · ' ~ app.name ~ ' · ' ~ cloudflare_cache_managed_marker,
+            'expression': '(http.host eq "' ~ app._app_host ~ '") and (' ~ (bypass_expr | join(' or ')) ~ ')',
+            'action': 'set_cache_settings',
+            'action_parameters': {'cache': false},
+            'enabled': true
+          }) -%}
+        {%- endif -%}
+        {# Cache rule #}
+        {%- set cache_paths = app.cache.routes_cached | default([]) -%}
+        {%- set cache_prefixes = app.cache.routes_cached_prefix | default([]) -%}
+        {%- if (cache_paths | length + cache_prefixes | length) > 0 -%}
+          {%- set cache_expr = [] -%}
+          {%- for p in cache_paths -%}
+            {%- set _ = cache_expr.append('http.request.uri.path eq "' ~ p ~ '"') -%}
+          {%- endfor -%}
+          {%- for p in cache_prefixes -%}
+            {%- set _ = cache_expr.append('starts_with(http.request.uri.path, "' ~ p ~ '")') -%}
+          {%- endfor -%}
+          {%- set ttl = app.cache.cache_ttl_seconds | default(60) | int -%}
+          {%- set browser_ttl = app.cache.browser_ttl_seconds | default(ttl) | int -%}
+          {%- set _ = rules.append({
+            'description': 'cache · ' ~ app.name ~ ' · ' ~ cloudflare_cache_managed_marker,
+            'expression': '(http.host eq "' ~ app._app_host ~ '") and (' ~ (cache_expr | join(' or ')) ~ ')',
+            'action': 'set_cache_settings',
+            'action_parameters': {
+              'cache': true,
+              'edge_ttl':    {'mode': 'override_origin', 'default': ttl},
+              'browser_ttl': {'mode': 'override_origin', 'default': browser_ttl}
+            },
+            'enabled': true
+          }) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ rules }}
+
+- name: "[{{ _cf_zone_name }}] Replace cache_settings phase ruleset"
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ _cf_zone_id }}/rulesets/phases/http_request_cache_settings/entrypoint"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ _cf_token }}"
+      Content-Type: application/json
+    body_format: json
+    body: "{{ _cf_ruleset_body }}"
+    status_code: 200
+  delegate_to: localhost
+  become: false
+  no_log: true
+  when: _cf_ruleset_body.rules | length > 0
+
+- name: "[{{ _cf_zone_name }}] Skip ruleset PUT when no cache-enabled apps"
+  debug:
+    msg: >-
+      No cache-enabled apps on {{ _cf_zone_name }} this run; existing
+      rules (if any) left untouched. Add `cache.enabled: true` to an
+      app entry to start managing.
+  when: _cf_ruleset_body.rules | length == 0

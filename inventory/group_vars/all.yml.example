@@ -23,28 +23,62 @@ ops_subdomain: ops
 # cert lineage, and its own set of ops endpoints — no domain is treated
 # as the "parent" of the others. Add as many as you want.
 #
-# Two API tokens per domain (more granular than one combined token):
-#   dns_vault_key       — Zone:DNS:Edit, used by certbot DNS-01 challenge.
+# Three API tokens per domain (granular per use; can be combined into
+# a single token if you'd rather):
+#   dns_vault_key       — Zone:DNS:Edit, used by certbot DNS-01 challenge
+#                         and the cloudflare_dns role.
 #   firewall_vault_key  — Zone:Firewall Services:Edit, used by fail2ban
 #                         to push bans to IP Access Rules.
-# Both keys name an entry in secrets.yml. Mint scoped tokens at
+#   cache_vault_key     — Zone:Cache Rules:Edit + Zone:Zone Settings:Edit,
+#                         used by the cloudflare_cache role.
+# Each key names an entry in secrets.yml. Mint scoped tokens at
 # https://dash.cloudflare.com/profile/api-tokens and restrict each to
 # its single zone.
+#
+# Optional `cache_settings` block overrides the role defaults
+# (defaults/main.yml of cloudflare_cache) for that zone.
 domains:
   - name: example.com
     zone_id: <32-hex-zone-id-for-example-com>
     dns_vault_key: cf_token_example_com_dns
     firewall_vault_key: cf_token_example_com_firewall
+    cache_vault_key: cf_token_example_com_cache
+    # cache_settings:
+    #   security_level: high
   - name: example.org
     zone_id: <32-hex-zone-id-for-example-org>
     dns_vault_key: cf_token_example_org_dns
     firewall_vault_key: cf_token_example_org_firewall
+    cache_vault_key: cf_token_example_org_cache
 
 # Apps to deploy on every VM. Each name corresponds to apps/<name>/.
 # `base_domain` must match one of the names in `domains` above (the
 # apps role uses it to find the matching cert lineage). The playbooks
 # render the per-env domain (env_prefix + base_domain, with optional
 # subdomain prefix) at deploy time.
+#
+# Optional fields:
+#   replicas:            int (default 1). When >1, the apps role generates
+#                        N container services (`<name>-1`, `<name>-2`, …)
+#                        and an nginx upstream block load-balancing across
+#                        them. Use to scale single-threaded SSR / API
+#                        workers horizontally on the same VM.
+#   cache:               opt-in to Cloudflare cache rules via the
+#                        cloudflare_cache role. See block on `myapp` below.
+#   db_pool_min_size:    int. Sets DB_POOL_MIN_SIZE env var on each replica
+#                        (the app reads this to size its asyncpg / pg pool).
+#   db_pool_max_size:    int. Same idea; multiplied by `replicas` is the
+#                        effective concurrent connection ceiling on Postgres.
+#   serve_immutable_assets:
+#                        bool (default false). When true, the per-app nginx
+#                        vhost adds a `location /_app/immutable/` block
+#                        that uses nginx's proxy_cache (declared in nginx.conf
+#                        as the `assets` zone) to cache responses for 365 d.
+#                        Use for SvelteKit-style apps where hashed paths
+#                        under /_app/immutable/ are content-addressed +
+#                        safe to cache forever. First request seeds the
+#                        cache; every subsequent request bypasses the
+#                        upstream entirely.
 apps:
   - name: frontend
     base_domain: example.com    # → example.com (Prod) / uat.example.com (UAT)
@@ -58,8 +92,36 @@ apps:
     port: 3000
     needs_database: true
     needs_jwt: true
+    replicas: 3                  # 3 SvelteKit instances behind one nginx upstream
+    db_pool_min_size: 10
+    db_pool_max_size: 30
+    serve_immutable_assets: true
+    cache:
+      enabled: true
+      # Exact paths to cache (anonymous marketing). Each gets a CF
+      # cache rule with edge + browser TTL = cache_ttl_seconds.
+      routes_cached:
+        - /
+        - /pricing
+        - /tools
+        - /privacy
+        - /terms
+      # Path prefixes — everything below the prefix gets cached.
+      # routes_cached_prefix:
+      #   - /assets/
+      # Authenticated / dynamic routes that must NEVER cache. Bypass
+      # rules are evaluated BEFORE cache rules, so any overlap = bypass
+      # wins. Trailing /* matches the prefix; bare paths match exact.
+      routes_bypassed:
+        - /api/*
+        - /app/*
+        - /signin
+        - /signup
+      cache_ttl_seconds: 60
+      browser_ttl_seconds: 60
     # Per-app env vars (in addition to the auto-generated DATABASE_URL +
-    # JWT_SECRET). Reference vault values via {{ ... }}.
+    # JWT_SECRET + DB_POOL_MIN_SIZE + DB_POOL_MAX_SIZE). Reference vault
+    # values via {{ ... }}.
     # env:
     #   ORIGIN: "https://{{ env_prefix }}example.org"
     #   BETTER_AUTH_SECRET: "{{ myapp_better_auth_secret }}"
@@ -70,6 +132,7 @@ apps:
     port: 8000
     needs_database: false       # shares myapp's DB (set DATABASE_URL via env below)
     needs_jwt: false
+    replicas: 2
     # env:
     #   DATABASE_URL: "postgresql://myapp:{{ myapp_db_password }}@postgres:5432/myapp"
 

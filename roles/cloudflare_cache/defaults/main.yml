@@ -1,0 +1,17 @@
+---
+# Stamp the rulesets we manage so an operator can tell hand-edits in
+# the CF dashboard apart from ours. Same idea as cloudflare_dns_managed_marker.
+cloudflare_cache_managed_marker: "managed by ansible cloudflare_cache role"
+
+# Default zone settings applied to every domain that has at least one
+# cache-enabled app. Override per-domain by setting `domain.cache_settings`
+# in group_vars/all.yml.
+cloudflare_cache_default_settings:
+  always_use_https: "on"
+  min_tls_version: "1.2"
+  brotli: "on"
+  http3: "on"
+  email_obfuscation: "on"
+  hotlink_protection: "off"   # we want our own image URLs to be hotlinkable
+  ssl: "strict"               # CF expects valid origin cert (we have LE)
+  security_level: "medium"

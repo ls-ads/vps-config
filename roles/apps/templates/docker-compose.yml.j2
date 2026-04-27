@@ -1,15 +1,26 @@
 # Managed by Ansible (roles/apps). Do not edit — regenerated from
 # group_vars/all.yml + secrets.yml on every deploy.
+#
+# When `app.replicas` > 1 the role renders N services named
+# `<app>-1`, `<app>-2`, … all sharing the same image + .env. The
+# matching nginx vhost includes an `upstream` block that round-robins
+# across them. Use to scale single-threaded SSR or workers
+# horizontally on a single VM (Postgres + Redis are still single
+# instances; size their connection pools accordingly).
 
 services:
-  {{ app.name }}:
+{% set replicas = app.replicas | default(1) | int %}
+{% for i in range(1, replicas + 1) %}
+{%   set svc = app.name if replicas == 1 else (app.name ~ '-' ~ i) %}
+  {{ svc }}:
     image: {{ app.image }}
-    container_name: {{ app.name }}
+    container_name: {{ svc }}
     restart: unless-stopped
     env_file:
       - .env
     networks:
       - {{ infra_network_name | default('infra') }}
+{% endfor %}
 
 networks:
   {{ infra_network_name | default('infra') }}:

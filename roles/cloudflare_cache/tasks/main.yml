@@ -1,0 +1,61 @@
+---
+# cloudflare_cache role — manages Cloudflare cache rules + zone settings
+# for each app declared with `cache.enabled: true`.
+#
+# Apps opt in via `cache:` block (group_vars/all.yml):
+#
+#     - name: myapp
+#       base_domain: example.com
+#       cache:
+#         enabled: true
+#         routes_cached:        # exact paths to cache
+#           - /
+#           - /pricing
+#         routes_cached_prefix: # path prefixes to cache (everything below)
+#           - /assets/
+#         routes_bypassed:      # never cache these (auth, app, api)
+#           - /api/*
+#           - /app/*
+#           - /signin
+#         cache_ttl_seconds: 60
+#         browser_ttl_seconds: 60
+#
+# Each `domain` in `domains` (group_vars/all.yml) needs a `cache_vault_key`
+# pointing to a secrets.yml entry with a CF API token scoped to:
+#   - Zone:Zone:Read
+#   - Zone:Zone Settings:Edit
+#   - Zone:Cache Rules:Edit
+#
+# All API calls run from the controller (delegate_to: localhost). Idempotent:
+# the role replaces the entire managed ruleset each run, so removing a path
+# from `routes_cached` deletes the rule on next deploy.
+#
+# Per-domain zone settings (TLS, HTTPS-only, brotli, etc.) live in
+# `cloudflare_cache_default_settings` (defaults/main.yml) and can be
+# overridden per-domain via `domain.cache_settings`.
+
+- name: Build the per-domain cache config from cache-enabled apps
+  set_fact:
+    _cf_cache_domains: >-
+      {{
+        domains
+        | selectattr('cache_vault_key', 'defined')
+        | map(attribute='name')
+        | list
+        | unique
+      }}
+
+- name: Apply cache rules + zone settings per domain
+  include_tasks: sync_zone.yml
+  loop: "{{ _cf_cache_domains }}"
+  loop_control:
+    loop_var: _cf_zone_name
+  when: _cf_cache_domains | length > 0
+
+- name: "(no-op when no domains have cache_vault_key set)"
+  debug:
+    msg: >-
+      No domains had `cache_vault_key` defined; cloudflare_cache role
+      did nothing this run. Set `cache_vault_key` on a domain entry
+      (group_vars/all.yml) to opt it in.
+  when: _cf_cache_domains | length == 0

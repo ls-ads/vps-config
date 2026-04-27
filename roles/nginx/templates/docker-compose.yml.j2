@@ -50,6 +50,17 @@ services:
       # /var/lib/postgresql/data — mount the parent dir so pg_upgrade works.
       - postgres_data:/var/lib/postgresql
       - ./postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    # Bumped max_connections from the 100 default so multi-replica apps
+    # don't exhaust the pool. Each replica opens up to its
+    # `db_pool_max_size`; sum across replicas easily exceeds 100 once
+    # any app scales out. shared_buffers grows proportionally so the
+    # bigger connection table doesn't crowd the page cache.
+    command:
+      - postgres
+      - -c
+      - max_connections={{ postgres_max_connections | default(200) }}
+      - -c
+      - shared_buffers={{ postgres_shared_buffers | default('256MB') }}
     ports:
       - "127.0.0.1:5432:5432"
     networks:
