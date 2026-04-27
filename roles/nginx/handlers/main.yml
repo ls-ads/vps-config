@@ -1,7 +1,16 @@
 ---
+# Restart, not reload. Reason: nginx.conf is a single-file Docker bind
+# mount, and ansible's `copy` module replaces files via tempfile + mv,
+# which the kernel sees as a new inode. Docker's mount is bound to the
+# old inode, so the container keeps reading stale config — `nginx -s
+# reload` reloads the stale config and nothing changes.
+#
+# Restarting the container re-resolves the path and picks up the new
+# inode. Brief connection drop, but config changes are rare (during
+# deploys) and reliability matters more than a few dropped keepalives.
 - name: reload nginx
-  community.docker.docker_container_exec:
-    container: nginx
-    command: nginx -s reload
-  ignore_errors: true
+  community.docker.docker_container:
+    name: nginx
+    state: started
+    restart: true
   listen: reload nginx
