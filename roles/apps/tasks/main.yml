@@ -21,6 +21,16 @@
     loop_var: app
     label: "{{ app.name }}"
 
+# Flush handlers (nginx reload, in particular) BEFORE the smoke test
+# runs. Otherwise an nginx vhost change goes to disk during deploy_app
+# but doesn't take effect in nginx until end-of-play — and the smoke
+# test runs first, fails because nginx is still serving the old
+# config, and ansible bails before handlers fire. Net result: bad
+# config persists until a manual restart. Flushing here guarantees
+# nginx is serving the new vhost when the smoke test hits it.
+- name: Flush handlers (nginx reload) so smoke test sees the new vhosts
+  meta: flush_handlers
+
 # --- Post-deploy smoke test ----------------------------------------
 # Hit each just-deployed app at its canonical HTTPS edge from the
 # Ansible controller (not the VM), so the path under test is the
