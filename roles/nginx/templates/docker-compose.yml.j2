@@ -177,6 +177,30 @@ services:
     networks:
       - {{ infra_network_name }}
 
+{% if ngrok_enabled | default(false) %}
+  # ============================================================
+  # NGROK TUNNEL — public bridge to a network-private app
+  # ============================================================
+  # When the apps on this VM aren't publicly addressable (e.g. UAT
+  # behind Tailscale with public 80/443 closed), a webhook from an
+  # external service can't reach them. ngrok provides a public URL
+  # that forwards to a container on the infra network.
+  #
+  # Forwards to `{{ ngrok_forward_to }}` (usually frontend:3000 or
+  # similar). Auth via NGROK_AUTHTOKEN rendered into the infra .env
+  # by the nginx role's `infra.env.j2`.
+  ngrok:
+    image: {{ ngrok_image }}
+    container_name: ngrok
+    restart: unless-stopped
+    mem_limit: 64m
+    command: http --url={{ ngrok_domain }} {{ ngrok_forward_to }}
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    networks:
+      - {{ infra_network_name }}
+{% endif %}
+
 networks:
   {{ infra_network_name }}:
     driver: bridge

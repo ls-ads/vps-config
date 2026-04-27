@@ -14,6 +14,7 @@ prometheus_image: "prom/prometheus:v3.11.2"
 node_exporter_image: "prom/node-exporter:v1.11.1"
 postgres_exporter_image: "prometheuscommunity/postgres-exporter:v0.19.1"
 cadvisor_image: "gcr.io/cadvisor/cadvisor:v0.55.1"
+ngrok_image: "ngrok/ngrok:3"
 
 # Shared Docker network name. Apps declare this as `external: true` in
 # their own docker-compose.yml so nginx can reach them by container name.
@@ -22,3 +23,20 @@ infra_network_name: infra
 # Default admin user for Postgres — safe to keep as `postgres`. Change
 # in group_vars/all.yml if you need a different name.
 postgres_user: postgres
+
+# ngrok tunnel — off by default. Useful for environments where apps
+# are network-private (e.g. UAT on a Tailscale-only VM) but external
+# services like a payments webhook still need to reach them. Override
+# in `group_vars/<env>.yml`:
+#
+#   ngrok_enabled: true
+#   ngrok_domain: "myproject-uat.ngrok.dev"   # reserved subdomain
+#   ngrok_forward_to: "myapp:3000"            # service:port on the
+#                                               infra Docker network
+#
+# Then add `ngrok_authtoken: "..."` to `secrets.yml`. Public envs
+# (Cloudflare-fronted) shouldn't need this — leave `ngrok_enabled`
+# at its default false.
+ngrok_enabled: false
+ngrok_domain: ""
+ngrok_forward_to: ""
