@@ -54,3 +54,9 @@
   retries: 6
   delay: 5
   until: smoke_results is succeeded
+  # On failure ansible dumps the loop's `item` (the entire app dict
+  # including the `env` block, which references secrets.yml values
+  # via Jinja that are already resolved by this point). no_log
+  # suppresses that dump. The status code, URL, and stderr from the
+  # uri module still surface in the human-readable PLAY RECAP.
+  no_log: true

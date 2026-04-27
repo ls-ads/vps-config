@@ -3,8 +3,15 @@
 # Cert lineage: /etc/letsencrypt/live/{{ app_cert_primary }}/
 
 {% set replicas = app.replicas | default(1) | int %}
+{# Underscores are not valid in DNS hostnames, and nginx's dynamic
+   `set $var; proxy_pass $var;` flow goes through DNS resolution
+   (truncating at the first `_`). So the upstream name must avoid
+   underscores — use a dash. The `proxy_pass http://<name>;` flow
+   uses static lookup against declared upstreams and bypasses DNS,
+   so we use that form when an upstream is declared. #}
+{% set upstream_name = app.name ~ '-pool' %}
 {% if replicas > 1 %}
-upstream {{ app.name }}_upstream {
+upstream {{ upstream_name }} {
 {%   for i in range(1, replicas + 1) %}
     server {{ app.name }}-{{ i }}:{{ app.port }} max_fails=3 fail_timeout=10s;
 {%   endfor %}
@@ -25,10 +32,11 @@ server {
     ssl_certificate     /etc/letsencrypt/live/{{ app_cert_primary }}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{{ app_cert_primary }}/privkey.pem;
 
+{% if replicas == 1 %}
+    # Single-replica: keep the dynamic-resolver flow we used before
+    # multi-replica landed, so docker DNS picks up the container at
+    # request time. Backwards-compatible with the existing apps.
     resolver 127.0.0.11 valid=30s;
-{% if replicas > 1 %}
-    set $upstream http://{{ app.name }}_upstream;
-{% else %}
     set $upstream http://{{ app.name }}:{{ app.port }};
 {% endif %}
 
@@ -41,7 +49,11 @@ server {
     # build. See /etc/nginx/nginx.conf for the matching
     # `proxy_cache_path` declaration.
     location /_app/immutable/ {
+{%   if replicas > 1 %}
+        proxy_pass http://{{ upstream_name }};
+{%   else %}
         proxy_pass $upstream;
+{%   endif %}
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_http_version 1.1;
@@ -49,10 +61,8 @@ server {
         proxy_cache_valid 200 365d;
         proxy_cache_use_stale error timeout updating;
         proxy_cache_lock on;
-        # Make sure the cached response is served with strong cache
-        # headers; the SvelteKit build already emits these but we
-        # belt-and-suspenders here so a misconfigured app can't
-        # leak short TTLs through.
+        # Belt-and-suspenders cache headers in case a misconfigured app
+        # accidentally emits a short TTL.
         expires 1y;
         add_header Cache-Control "public, immutable" always;
         add_header X-Cache-Status $upstream_cache_status always;
@@ -61,7 +71,11 @@ server {
 
     location / {
         limit_req zone=general burst=60 nodelay;
+{% if replicas > 1 %}
+        proxy_pass http://{{ upstream_name }};
+{% else %}
         proxy_pass $upstream;
+{% endif %}
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
