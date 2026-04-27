@@ -20,3 +20,37 @@
   loop_control:
     loop_var: app
     label: "{{ app.name }}"
+
+# --- Post-deploy smoke test ----------------------------------------
+# Hit each just-deployed app at its canonical HTTPS edge from the
+# Ansible controller (not the VM), so the path under test is the
+# same one a real user / external webhook traverses:
+#   DNS → (Cloudflare on prod, Tailscale on private envs) → nginx → app
+#
+# Accepts any non-5xx response. 200/301/302 cover frontend routes;
+# 401/403 cover auth-gated routes; 404 covers backends with no `/`
+# handler. Anything 5xx or a connection error fails the play loudly —
+# this catches a bad image push, a missing env var, an nginx vhost
+# typo, or a container that came up but wedged before binding.
+#
+# Retries 6 × 5s so the container has up to 30s after
+# `docker compose up -d` to actually be serving. Past that, the
+# deploy is broken.
+
+- name: "Smoke test: every deployed app responds non-5xx at its HTTPS edge"
+  uri:
+    url: "https://{{ ((app.subdomain ~ '.') if (app.subdomain is defined and app.subdomain) else '') }}{{ env_prefix }}{{ app.base_domain }}/"
+    method: GET
+    status_code: [200, 301, 302, 401, 403, 404]
+    return_content: false
+    timeout: 10
+  delegate_to: localhost
+  become: false
+  loop: "{{ apps_to_deploy }}"
+  loop_control:
+    loop_var: app
+    label: "{{ ((app.subdomain ~ '.') if (app.subdomain is defined and app.subdomain) else '') }}{{ env_prefix }}{{ app.base_domain }}"
+  register: smoke_results
+  retries: 6
+  delay: 5
+  until: smoke_results is succeeded
