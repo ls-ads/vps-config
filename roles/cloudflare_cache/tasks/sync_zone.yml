@@ -8,11 +8,21 @@
     _cf_zone:    "{{ domains | selectattr('name', 'equalto', _cf_zone_name) | first }}"
   no_log: true
 
-- name: "[{{ _cf_zone_name }}] Pick the API token from secrets.yml"
+- name: "[{{ _cf_zone_name }}] Pick the API token from secrets.yml (gracefully skip if not yet set)"
   set_fact:
     _cf_zone_id: "{{ _cf_zone.zone_id }}"
-    _cf_token:   "{{ lookup('vars', _cf_zone.cache_vault_key) }}"
+    _cf_token:   "{{ lookup('vars', _cf_zone.cache_vault_key, default='') }}"
   no_log: true
+
+- name: "[{{ _cf_zone_name }}] Skip — cache_vault_key references an empty/missing secret"
+  debug:
+    msg: >-
+      `{{ _cf_zone.cache_vault_key }}` resolved empty in secrets.yml.
+      Mint a CF API token (Zone:Zone:Read + Zone:Zone Settings:Edit +
+      Zone:Cache Rules:Edit, scoped to {{ _cf_zone_name }}) at
+      https://dash.cloudflare.com/profile/api-tokens, paste it as
+      `{{ _cf_zone.cache_vault_key }}` in secrets.yml, and re-run.
+  when: _cf_token | length == 0
 
 - name: "[{{ _cf_zone_name }}] Effective zone settings (defaults + domain override)"
   set_fact:
@@ -41,6 +51,7 @@
   loop_control:
     label: "{{ item.key }} = {{ item.value }}"
   no_log: true
+  when: _cf_token | length > 0
 
 # --- Cache rules ------------------------------------------------------------
 # CF exposes per-zone "phases" of rules; cache rules go in the
@@ -59,17 +70,6 @@
         | map('combine', {'_app_host': (env_prefix | default('')) ~ _cf_zone_name})
         | list
       }}
-
-- name: "[{{ _cf_zone_name }}] Render each app's bypass + cache rule"
-  set_fact:
-    _cf_rendered_rules: >-
-      {{
-        _cf_cache_rules
-        | map('community.general.dict_kv', 'app')
-        | map('combine', {})
-        | list
-      }}
-  when: false  # placeholder — actual rendering happens in Jinja below
 
 # Build the JSON ruleset payload. Two rules per app: one bypass (matched
 # first), one cache (matched second). Cloudflare evaluates rules in order;
@@ -142,7 +142,9 @@
   delegate_to: localhost
   become: false
   no_log: true
-  when: _cf_ruleset_body.rules | length > 0
+  when:
+    - _cf_token | length > 0
+    - _cf_ruleset_body.rules | length > 0
 
 - name: "[{{ _cf_zone_name }}] Skip ruleset PUT when no cache-enabled apps"
   debug:
@@ -150,4 +152,6 @@
       No cache-enabled apps on {{ _cf_zone_name }} this run; existing
       rules (if any) left untouched. Add `cache.enabled: true` to an
       app entry to start managing.
-  when: _cf_ruleset_body.rules | length == 0
+  when:
+    - _cf_token | length > 0
+    - _cf_ruleset_body.rules | length == 0
