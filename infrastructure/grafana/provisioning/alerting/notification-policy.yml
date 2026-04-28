@@ -1,0 +1,28 @@
+# Provisioned Grafana notification routing.
+#
+# The single root policy sends every alert to `ops-email`. Group by
+# (alertname, severity) so alerts that fire together arrive in one
+# email rather than as a flood. group_wait keeps that grouping window
+# short for criticals; group_interval throttles re-sends during a
+# sustained incident.
+
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: ops-email
+    group_by:
+      - alertname
+      - severity
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 1h
+    routes:
+      # Critical alerts skip group_wait entirely so they fire ASAP and
+      # repeat every 30 min until resolved.
+      - receiver: ops-email
+        matchers:
+          - severity = critical
+        group_wait: 0s
+        group_interval: 1m
+        repeat_interval: 30m

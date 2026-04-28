@@ -64,7 +64,23 @@
     owner: deploy
     group: deploy
     mode: "0644"
-  when: app.port is defined
+  # Skip apps that don't expose a Prometheus `/metrics` endpoint —
+  # SvelteKit apps push OTel via OTLP to Tempo (which then re-exposes
+  # the metrics for Prometheus to scrape from Tempo's metrics
+  # generator), so a direct scrape of `<app>:<port>/metrics` would
+  # 404 and trip `app-replica-down` alerts on perfectly healthy apps.
+  # FastAPI / Express / etc. that DO expose /metrics: leave default.
+  when:
+    - app.port is defined
+    - app.expose_metrics | default(true)
+
+- name: "[{{ app.name }}] Remove Prometheus scrape target (when expose_metrics is false)"
+  file:
+    path: "{{ server_infra_dir }}/prometheus/targets/{{ app.name }}.json"
+    state: absent
+  when:
+    - app.port is defined
+    - not (app.expose_metrics | default(true))
 
 # --- Postgres role + DB (idempotent) ----------------------------------
 

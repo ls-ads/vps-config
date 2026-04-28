@@ -1,0 +1,267 @@
+# Provisioned Grafana alert rules — infrastructure / generic.
+# Routed via notification-policy.yml → contact-points.yml (ops-email).
+#
+# Rules here are stack-agnostic: they fire on any VM running this
+# observability bundle. Per-app / per-business rules go in the
+# instance repo's `infrastructure/grafana/provisioning/alerting/`
+# (e.g. `myapp-rules.yml`); both files are merged at startup.
+#
+# Severity labels:
+#   critical → email skips group_wait, repeats every 30 min until resolved
+#   warn     → batched into the standard 5-min window
+#
+# To add a rule:
+#   - mint a fresh `uid` (any unique slug)
+#   - keep the `condition` ref pointing at the threshold node, not the raw query
+#   - set `for:` to dampen flapping (typically 5–10 min)
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: infrastructure
+    folder: Alerts
+    interval: 1m
+    rules:
+
+      - uid: vm-cpu-saturated
+        title: VM CPU saturated
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: { from: 600, to: 0 }
+            model:
+              refId: A
+              instant: true
+              # 1-min load avg per CPU core. >1.0 means cores are
+              # oversubscribed; >1.5 sustained means request-path
+              # latency is being throttled by the scheduler.
+              expr: node_load1 / count(count by (cpu) (node_cpu_seconds_total{mode="idle"}))
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [1.5] }
+        for: 10m
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: warn
+          component: vm
+        annotations:
+          summary: VM 1-min load avg > 1.5× CPU count for 10 min
+          description: "Sustained CPU oversubscription. Real-user latency will start climbing. Either traffic surged (check origin RPS) or a runaway process is on the box."
+          runbook_url: https://github.com/ls-ads/vps-config/blob/main/README.md#vm-cpu-saturated
+
+      - uid: disk-filling
+        title: Disk filling
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: { from: 600, to: 0 }
+            model:
+              refId: A
+              instant: true
+              expr: node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [0.10] }
+        for: 5m
+        noDataState: NoData
+        execErrState: Error
+        labels:
+          severity: warn
+          component: vm
+        annotations:
+          summary: Less than 10% disk free on /
+          description: "Postgres + Loki + container layers on the same volume. Sustained disk fill leads to write failures across the stack."
+          runbook_url: https://github.com/ls-ads/vps-config/blob/main/README.md#disk-filling
+
+      - uid: postgres-down
+        title: Postgres down
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: { from: 300, to: 0 }
+            model:
+              refId: A
+              instant: true
+              expr: pg_up
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+        for: 1m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          component: postgres
+        annotations:
+          summary: postgres-exporter cannot reach Postgres
+          description: "App requests that hit DB will fail until Postgres is back. Check container status, disk, and recent migrations."
+          runbook_url: https://github.com/ls-ads/vps-config/blob/main/README.md#postgres-down
+
+      - uid: postgres-conn-utilization
+        title: Postgres connection utilization high
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: { from: 600, to: 0 }
+            model:
+              refId: A
+              instant: true
+              expr: sum(pg_stat_activity_count) / on() pg_settings_max_connections
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.80] }
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warn
+          component: postgres
+        annotations:
+          summary: Postgres connection pool >80% of max_connections
+          description: "asyncpg pools are oversized for max_connections, OR a query leak is holding connections. Check pg_stat_activity for long-idle sessions."
+          runbook_url: https://github.com/ls-ads/vps-config/blob/main/README.md#postgres-conn-utilization
+
+      - uid: app-replica-down
+        title: App replica down
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: { from: 300, to: 0 }
+            model:
+              refId: A
+              instant: true
+              # Scopes to file_sd-managed app targets only; ignores
+              # infra exporters which have their own alerts.
+              # `up == 0` fires only on actual scrape failure (container
+              # crashed / port closed / DNS broken); a deliberate target
+              # removal makes the series disappear entirely, which the
+              # `noDataState: OK` below correctly interprets as "no
+              # target = no problem". Trade-off: a corrupted file_sd
+              # config that wipes targets won't trigger this alert; if
+              # that becomes a real concern, add a separate rule on
+              # `count(up{job=~"..."}) < expected_count`.
+              expr: up{job!~"prometheus|node-exporter|cadvisor|postgres-exporter"}
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+        for: 2m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+          component: app
+        annotations:
+          summary: App scrape target {{ $labels.job }} is down
+          description: "Prometheus cannot scrape {{ $labels.instance }}. Container crashed, OOM-killed, or wedged before binding the metrics port. Check `docker logs` and replica health."
+          runbook_url: https://github.com/ls-ads/vps-config/blob/main/README.md#app-replica-down
+
+      - uid: app-container-memory
+        title: App container memory high
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: { from: 600, to: 0 }
+            model:
+              refId: A
+              instant: true
+              # Working set / spec memory limit, per app container.
+              # Filter to numbered-replica naming (`<app>-1`, `<app>-2`,
+              # …) so observability sidecars don't trip this. If your
+              # apps are bare-named (single-replica), extend the regex
+              # in your instance repo's alerting overlay or override
+              # this rule. The `> 0` filter on the denominator excludes
+              # containers with NO mem_limit set — `working_set / 0 =
+              # inf` would otherwise always trip the threshold and
+              # produce noise alerts on healthy unlimited containers.
+              expr: |
+                container_memory_working_set_bytes{name=~".+-[0-9]+"}
+                /
+                (container_spec_memory_limit_bytes{name=~".+-[0-9]+"} > 0)
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.90] }
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warn
+          component: app
+        annotations:
+          summary: Container {{ $labels.name }} memory >90% of limit
+          description: "OOM is imminent. Either the container needs a larger `mem_limit` or there's a leak. Check Tempo for slow handlers + `container_memory_working_set_bytes` trend."
+          runbook_url: https://github.com/ls-ads/vps-config/blob/main/README.md#app-container-memory
+
+      - uid: nginx-5xx-rate
+        title: nginx 5xx response rate elevated
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: loki
+            relativeTimeRange: { from: 300, to: 0 }
+            model:
+              refId: A
+              # nginx access log format puts the status code at field 9
+              # (after timestamp + request line). LogQL `pattern` would
+              # be cleaner once nginx logs are JSON; until then this
+              # regex grep matches the literal " 5xx " substring in
+              # the request line. Rate is per second.
+              expr: 'sum(rate({container="nginx"} |~ " 5\\d\\d " [5m]))'
+              datasource:
+                type: loki
+                uid: loki
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.05] }
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: critical
+          component: nginx
+        annotations:
+          summary: nginx serving 5xx responses (>0.05/s)
+          description: "An upstream is broken. Common causes: app container crashed, deploy mid-flight without flush_handlers, certbot renewal mid-rotation. Check `docker logs nginx` and the per-app upstream."
+          runbook_url: https://github.com/ls-ads/vps-config/blob/main/README.md#nginx-5xx-rate

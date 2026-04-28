@@ -1,0 +1,42 @@
+# Provisioned Grafana contact points. Loaded automatically at startup
+# from /etc/grafana/provisioning/alerting/. The SMTP transport is
+# wired via GF_SMTP_* env vars in roles/nginx/templates/infra.env.j2
+# (defaults to SendGrid relay reusing `sendgrid_api_key`).
+#
+# Edit `addresses` below to change the alert destination. Ansible does
+# NOT template this file — it's static YAML synchronized by the
+# observability role. To override the destination per-environment,
+# copy this file into the instance repo's
+# `infrastructure/grafana/provisioning/alerting/` (the synchronize
+# task in roles/observability/tasks/main.yml uses `delete: false`,
+# but file-level overlap is resolved by file mtime; the instance
+# copy wins because it's synced last in the playbook).
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: ops-email
+    receivers:
+      - uid: ops-email
+        type: email
+        settings:
+          # Comma-separated. Replace with your on-call address(es) per
+          # environment by overriding this file in the instance repo.
+          addresses: ops@example.com
+          singleEmail: false
+          # Subject + body keep the alert label set front-and-centre so
+          # the receiver can triage from a phone notification without
+          # opening Grafana.
+          subject: "[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}"
+          message: |
+            {{ range .Alerts }}
+            Severity: {{ .Labels.severity }}
+            Started: {{ .StartsAt }}
+            Summary: {{ .Annotations.summary }}
+            Description: {{ .Annotations.description }}
+            Runbook: {{ .Annotations.runbook_url }}
+            Dashboard: {{ .Annotations.dashboard_url }}
+            ----
+            {{ end }}
+        disableResolveMessage: false
